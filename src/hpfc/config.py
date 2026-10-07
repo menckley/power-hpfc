@@ -35,6 +35,7 @@ class HPFCConfig:
     n_years: int
     short_days: int
     short_window_days: int
+    cascade_days: int
     intra_start: date
     min_obs: int
     min_full_years: int
@@ -58,6 +59,7 @@ class HPFCConfig:
             n_months=raw["products"]["n_months"], n_quarters=raw["products"]["n_quarters"],
             n_years=raw["products"]["n_years"], short_days=raw["products"]["short_days"],
             short_window_days=raw["products"]["short_window_days"],
+            cascade_days=int(raw["products"]["cascade_days"]),
             intra_start=raw["shape"]["intra_start"], min_obs=raw["shape"]["min_obs"],
             min_full_years=raw["shape"]["min_full_years"],
             arbitrage_tol=float(raw["calibration"]["arbitrage_tol"]),

@@ -17,6 +17,8 @@ from hpfc.config import HPFCConfig
 from hpfc.constraints import ConstraintSet
 from hpfc.shape import ShapeModel, scale_dev, shape_parts
 
+RESID_TOL = 1e-6   # EUR/MWh, même seuil que le contrôle d'absence d'arbitrage
+
 
 @dataclass
 class CurveSystem:
@@ -28,14 +30,20 @@ class CurveSystem:
     masks: list                # heures couvertes par chaque contrainte
     settlements: np.ndarray
     kkt: np.ndarray            # matrice KKT (ne dépend pas de la forme)
+    names: list                # libellé de chaque contrainte (diagnostic)
 
     def solve(self, shape_arr: np.ndarray) -> np.ndarray:
         """Courbe calibrée pour une forme donnée."""
         rhs = np.array([s - shape_arr[m].mean() for s, m in zip(self.settlements, self.masks)])
         n = len(self.days)
+        if np.isnan(rhs).any():
+            raise ValueError("calibration : forme indéfinie sur une contrainte")
         sol = np.linalg.solve(self.kkt, np.concatenate([np.zeros(2 * n), rhs]))
-        if np.abs(self.C @ sol[:2 * n] - rhs).max() > 1e-8:
-            raise ValueError("calibration : contraintes non respectées")
+        resid = np.abs(self.C @ sol[:2 * n] - rhs)
+        if not np.isfinite(resid).all() or resid.max() > RESID_TOL:
+            k = int(np.nanargmax(resid))
+            raise ValueError(f"calibration : contraintes non respectées (écart max {resid.max():.2e} "
+                             f"sur {self.names[k]}, conditionnement {np.linalg.cond(self.kkt):.2e})")
         a, p = sol[:n], sol[n:2 * n]
         return shape_arr + a[self.hour_day] + self.is_peak * p[self.hour_day]
 
@@ -69,8 +77,9 @@ def build_system(cal: pd.DataFrame, cs: ConstraintSet, dh: pd.DataFrame) -> Curv
     Q = np.zeros((2 * n, 2 * n))
     Q[:n, :n] = Q[n:, n:] = D1.T @ D1
     kkt = np.block([[2 * Q, C.T], [C, np.zeros((len(C), len(C)))]])
+    names = (cs.constraints["profile"] + " " + cs.constraints["name"].astype(str)).tolist()
     return CurveSystem(cal, days, hour_day, is_peak, C, masks,
-                       cs.constraints["settlement"].to_numpy(dtype=float), kkt)
+                       cs.constraints["settlement"].to_numpy(dtype=float), kkt, names)
 
 
 def build_curve(model: ShapeModel, system: CurveSystem, cfg: HPFCConfig) -> tuple[np.ndarray, dict]:

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Environnements virtuels
+envir_lib/
+.venv/
+venv/
+
+# Secrets locaux
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/data/
+
+# macOS
+.DS_Store
+
+# Écritures interrompues
+*.tmp

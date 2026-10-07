@@ -15,6 +15,7 @@ Règles vérifiées pour la France (notebook de recherche, cellules 4.3 à 4.6) 
 """
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
@@ -51,6 +52,7 @@ MARKETS = {
 }
 
 HttpGet = Callable[[dict], dict]
+log = logging.getLogger("marketdata.eex")
 
 
 @dataclass(frozen=True)
@@ -136,19 +138,47 @@ def make_contract(area: str, profile: str, kind: str, start: date) -> Contract:
     return Contract(area, profile, kind, start, end, name, code, maturity, MATURITY_TYPE[kind])
 
 
-def request_table(params: dict, timeout: int = 30) -> dict:
-    """Appel brut de l'API table-data : JSON tel quel, ou erreur explicite."""
+RETRY_STATUS = {429, 500, 502, 503, 504}
+
+
+def _retry_wait(response, attempt: int, backoff: float) -> float:
+    header = response.headers.get("Retry-After") if response is not None else None
+    try:
+        return max(float(header), 1.0)
+    except (TypeError, ValueError):
+        return backoff * 2 ** attempt
+
+
+def request_table(params: dict, timeout: int = 30, max_retries: int = 6, backoff: float = 15.0,
+                  sleep: Callable[[float], None] = time.sleep) -> dict:
+    """Appel brut de l'API table-data : JSON tel quel, ou erreur explicite.
+
+    Limite de débit (HTTP 429) ou erreur serveur (5xx) : nouvel essai après une attente
+    croissante (15 s, 30 s, 60 s...), ou celle indiquée par EEX (en-tête Retry-After).
+    """
     label = f"EEX {params.get('shortCode')} {params.get('maturity')}"
-    try:
-        r = requests.get(API_URL, params=params, headers=HEADERS, timeout=timeout)
-    except requests.RequestException as exc:
-        raise DataNotFoundError(f"{label} : requête impossible : {exc!r}") from exc
-    if not r.ok:
-        raise DataNotFoundError(f"{label} : HTTP {r.status_code} : {r.text[:300]!r}")
-    try:
-        return r.json()
-    except ValueError as exc:
-        raise DataNotFoundError(f"{label} : réponse non JSON : {r.text[:300]!r}") from exc
+    for attempt in range(max_retries + 1):
+        try:
+            r = requests.get(API_URL, params=params, headers=HEADERS, timeout=timeout)
+        except requests.RequestException as exc:
+            if attempt == max_retries:
+                raise DataNotFoundError(f"{label} : requête impossible : {exc!r}") from exc
+            wait = backoff * 2 ** attempt
+            log.warning("%s : erreur réseau, nouvel essai dans %.0f s", label, wait)
+            sleep(wait)
+            continue
+        if r.status_code in RETRY_STATUS and attempt < max_retries:
+            wait = _retry_wait(r, attempt, backoff)
+            log.warning("%s : HTTP %s, nouvel essai dans %.0f s", label, r.status_code, wait)
+            sleep(wait)
+            continue
+        if not r.ok:
+            raise DataNotFoundError(f"{label} : HTTP {r.status_code} : {r.text[:300]!r}")
+        try:
+            return r.json()
+        except ValueError as exc:
+            raise DataNotFoundError(f"{label} : réponse non JSON : {r.text[:300]!r}") from exc
+    raise DataNotFoundError(f"{label} : échec après {max_retries} nouveaux essais")
 
 
 def parse_history(payload: dict, contract: Contract) -> pd.DataFrame:
@@ -221,16 +251,39 @@ def listed_candidates(area: str, session: date, n_months: int, n_quarters: int, 
     return sorted(out, key=lambda c: (c.profile, KIND_ORDER[c.kind], c.start))
 
 
-def fetch_session(contracts: list[Contract], session: date, http: HttpGet = request_table,
-                  pause: float = 0.2) -> pd.DataFrame:
-    """Settlement de chaque contrat à la séance donnée (NaN si non publié ce jour-là)."""
-    rows = []
-    for c in contracts:
-        value = fetch_settlement(c, session, http)
-        rows.append({**asdict(c), "settlement": float("nan") if value is None else value})
+def settlement_at(hist: pd.DataFrame, session: date) -> float:
+    """Settlement d'un historique à une séance ; NaN si absent ou non publié."""
+    if session in hist.index and not pd.isna(hist.at[session, "settlement"]):
+        return float(hist.at[session, "settlement"])
+    return float("nan")
+
+
+def fetch_sessions(contracts_by_session: dict[date, list[Contract]], http: HttpGet = request_table,
+                   pause: float = 1.0, lookback_days: int = 7) -> dict[date, pd.DataFrame]:
+    """Settlements de plusieurs séances en interrogeant chaque contrat UNE seule fois,
+    sur une fenêtre couvrant toutes les séances (beaucoup moins de requêtes qu'une
+    séance après l'autre)."""
+    if not contracts_by_session:
+        return {}
+    unique = sorted({c for cs in contracts_by_session.values() for c in cs},
+                    key=lambda c: (c.profile, KIND_ORDER[c.kind], c.start))
+    w0 = min(contracts_by_session) - timedelta(days=lookback_days)
+    w1 = max(contracts_by_session)
+    histories = {}
+    for i, c in enumerate(unique, 1):
+        histories[c] = fetch_history(c, w0, w1, http)
+        if i % 20 == 0 or i == len(unique):
+            log.info("EEX : %d / %d contrats interrogés", i, len(unique))
         if pause:
             time.sleep(pause)
-    return pd.DataFrame(rows)
+    return {s: pd.DataFrame([{**asdict(c), "settlement": settlement_at(histories[c], s)} for c in cs])
+            for s, cs in contracts_by_session.items()}
+
+
+def fetch_session(contracts: list[Contract], session: date, http: HttpGet = request_table,
+                  pause: float = 1.0) -> pd.DataFrame:
+    """Settlement de chaque contrat à la séance donnée (NaN si non publié ce jour-là)."""
+    return fetch_sessions({session: contracts}, http, pause)[session]
 
 
 def latest_session(area: str, today: date, http: HttpGet = request_table,

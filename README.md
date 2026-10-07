@@ -6,18 +6,30 @@ chaque jour à partir des settlements EEX et de l'historique day-ahead ENTSO-E.
 ## Organisation
 
 - `src/marketdata/` : modules de données **réutilisables** (ENTSO-E, EEX, stockage Parquet).
-  Ils ne dépendent pas de la HPFC et peuvent être importés dans d'autres projets.
-- `src/hpfc/` : librairie HPFC (étape 2).
-- `scripts/` : points d'entrée (vérification des sources, run quotidien).
+- `src/hpfc/` : librairie HPFC (calendrier, contraintes, forme, calibration, archive, pipeline).
+- `config/FR.yaml` : paramètres du marché et du modèle.
 - `tests/` : tests automatiques (`python -m pytest`).
-- `notebooks/` : notebook de recherche.
-- `data/` : archive alimentée par le workflow quotidien.
+- `data/` : archive (settlements, spot, courbes), alimentée par le run quotidien.
 
-## Installation locale
+## Commandes
+
+La clé ENTSO-E est lue dans la variable d'environnement `ENTSOE_API_KEY`.
 
 ```bash
-/chemin/vers/envir_lib/bin/python -m pip install -e ".[dev]"
-/chemin/vers/envir_lib/bin/python -m pytest
+python -m hpfc.cli run                                   # courbe de la dernière séance EEX
+python -m hpfc.cli run --date 2026-10-05                 # courbe d'une séance précise
+python -m hpfc.cli backfill                              # séances encore disponibles (~45 jours)
+python -m hpfc.cli list                                  # courbes archivées
+python -m hpfc.cli curve --date 2026-10-05 --out c.csv   # extraction d'une courbe
+python -m hpfc.cli settlements --contract Cal-27 --profile Base --out cal27.csv
+```
+
+En Python :
+
+```python
+from hpfc.archive import load_curve, load_settlements, load_spot
+curve = load_curve("FR", "2026-10-05")
+cal27 = load_settlements("FR", contract="Cal-27", profile="Base")
 ```
 
 ## Règle de données

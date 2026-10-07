@@ -11,6 +11,7 @@ Règles (validées dans le notebook de recherche) :
 from __future__ import annotations
 
 import inspect
+import logging
 from datetime import date, timedelta
 
 import pandas as pd
@@ -20,6 +21,7 @@ from marketdata.grid import check_grid, expected_grid, to_hourly
 from marketdata.store import partition_dir, read_parquet, write_parquet
 
 MTU_15MIN_START = date(2025, 10, 1)   # 1re livraison du day-ahead SDAC au pas de 15 min
+log = logging.getLogger("marketdata.entsoe")
 
 
 def make_client(api_key: str):
@@ -83,36 +85,50 @@ def load_day_ahead(client, area: str, start: date, end: date, tz: str,
 
     Si `root` est fourni, chaque mois est archivé dans
     root/entsoe/day_ahead/market=<market>/month=AAAA-MM/day_ahead.parquet.
-    Un mois en cache qui ne couvre pas la période demandée est rechargé depuis son
-    premier jour (le fichier du mois en cours s'allonge ainsi de jour en jour).
+    Les mois absents du cache sont téléchargés un par un. Un mois en cache qui ne
+    couvre pas la période demandée est rechargé depuis son premier jour.
     """
     if root is not None and not market:
         raise ValueError("market est requis pour archiver")
-    parts = []
-    for s0, e0 in month_chunks(start, end):
-        freq = native_freq(s0, mtu_switch)
-        expected = expected_grid(s0, e0, tz, freq)
-        label = f"ENTSO-E day-ahead {area} {s0} -> {e0}"
-        path = (partition_dir(root, "entsoe/day_ahead", market=market, month=f"{s0:%Y-%m}")
-                / "day_ahead.parquet") if root is not None else None
+    months = month_chunks(start, end)
+    paths = [(partition_dir(root, "entsoe/day_ahead", market=market, month=f"{s0:%Y-%m}")
+              / "day_ahead.parquet") if root is not None else None for s0, _ in months]
 
-        chunk = None
-        if path is not None and path.exists():
-            cached = read_parquet(path)["price"]
+    parts, need = {}, []
+    for i, (s0, e0) in enumerate(months):
+        expected = expected_grid(s0, e0, tz, native_freq(s0, mtu_switch))
+        if paths[i] is not None and paths[i].exists():
+            cached = read_parquet(paths[i])["price"]
             sub = cached[(cached.index >= expected[0]) & (cached.index <= expected[-1])]
             try:
-                check_grid(sub, expected, label)
-                chunk = sub
+                check_grid(sub, expected, f"ENTSO-E day-ahead {area} {s0} -> {e0}")
+                parts[i] = sub
+                continue
             except DataNotFoundError:
-                chunk = None          # le cache ne couvre pas la demande : on recharge
-        if chunk is None:
-            fetch_start = date(s0.year, s0.month, 1) if path is not None else s0
-            fetched = fetch_day_ahead(client, area, fetch_start, e0, tz, mtu_switch)
-            if path is not None:
-                write_parquet(fetched, path)
-            chunk = fetched[(fetched.index >= expected[0]) & (fetched.index <= expected[-1])]
-        parts.append(chunk)
-    return pd.concat(parts).sort_index()
+                pass                  # le cache ne couvre pas la demande : on recharge
+        need.append(i)
+
+    # Une requête par mois manquant. (Des requêtes annuelles perdaient un pas en fin
+    # d'année via entsoe-py : 2019-12-31 00:00 absent. Les requêtes mensuelles sont validées.)
+    groups = [[i] for i in need]
+
+    for g in groups:
+        first = months[g[0]][0]
+        fetch_start = date(first.year, first.month, 1) if root is not None else first
+        fetch_end = months[g[-1]][1]
+        log.info("ENTSO-E : téléchargement %s -> %s", fetch_start, fetch_end)
+        fetched = fetch_day_ahead(client, area, fetch_start, fetch_end, tz, mtu_switch)
+        for i in g:
+            s0, e0 = months[i]
+            m0 = date(s0.year, s0.month, 1) if root is not None else s0
+            lo = pd.Timestamp(m0, tz=tz).tz_convert("UTC")
+            hi = pd.Timestamp(e0 + timedelta(days=1), tz=tz).tz_convert("UTC")
+            month_part = fetched[(fetched.index >= lo) & (fetched.index < hi)]
+            if paths[i] is not None:
+                write_parquet(month_part, paths[i])
+            t0 = pd.Timestamp(s0, tz=tz).tz_convert("UTC")
+            parts[i] = month_part[month_part.index >= t0]
+    return pd.concat([parts[i] for i in range(len(months))]).sort_index()
 
 
 def load_day_ahead_hourly(client, area: str, start: date, end: date, tz: str,

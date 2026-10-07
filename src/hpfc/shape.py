@@ -55,7 +55,7 @@ def calibration_months(hist: pd.DataFrame, cfg: HPFCConfig, pricing_date: date) 
 def estimate_seasonality(calib_m: pd.DataFrame, min_full_years: int) -> tuple[pd.Series, list[int]]:
     """Écart moyen de chaque mois à la moyenne (pondérée par les heures) de son année."""
     m_stats = calib_m.groupby(["year", "month"]).agg(mean=("price", "mean"), hours=("duration_h", "sum"))
-    full_years = [y for y, g in m_stats.groupby(level="year") if len(g) == 12]
+    full_years = [int(y) for y, g in m_stats.groupby(level="year") if len(g) == 12]
     if len(full_years) < min_full_years:
         raise DataNotFoundError(f"seulement {len(full_years)} années complètes pour la saisonnalité")
     season = m_stats.loc[full_years]

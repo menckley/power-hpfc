@@ -24,6 +24,9 @@ products:                  # contrats EEX interrogés à chaque séance
   n_years: 3
   short_days: 11
   short_window_days: 35
+  cascade_days: 7          # un trimestre / une année peut disparaître juste avant livraison
+                           # (cascade EEX en mois / trimestres) : toléré s'il démarre
+                           # dans ce délai ET que la courbe reste entièrement couverte
 
 shape:
   intra_start: 2023-07-01  # profil intra-mensuel estimé sur la période récente (effet solaire)

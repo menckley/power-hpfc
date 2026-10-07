@@ -71,3 +71,15 @@ def test_archive_mensuelle(tmp_path):
     assert client.calls == 1 and len(b) == 2 * 96              # servi par le cache
     load_day_ahead(client, "FR", date(2026, 10, 1), date(2026, 10, 7), TZ, root=tmp_path, market="FR")
     assert client.calls == 2                                   # le mois s'allonge : rechargé
+
+
+def test_une_requete_par_mois_manquant(tmp_path):
+    pytest.importorskip("pyarrow")
+    client = FakeClient()
+    s = load_day_ahead(client, "FR", date(2024, 1, 1), date(2024, 3, 31), TZ, root=tmp_path, market="FR")
+    assert client.calls == 3 and len(s) == (31 + 29 + 31) * 24 - 1
+    months = sorted(p.name for p in (tmp_path / "entsoe/day_ahead/market=FR").iterdir())
+    assert months == ["month=2024-01", "month=2024-02", "month=2024-03"]
+    client2 = FakeClient()
+    load_day_ahead(client2, "FR", date(2023, 12, 1), date(2024, 2, 29), TZ, root=tmp_path, market="FR")
+    assert client2.calls == 1          # seul décembre 2023 manquait

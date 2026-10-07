@@ -103,3 +103,54 @@ def test_derniere_seance_publiee():
                                   [("2026-10-01", 160.0), ("2026-10-02", 160.5), ("2026-10-05", 154.2),
                                    ("2026-10-06", None)])
     assert latest_session("FR", date(2026, 10, 7), http) == date(2026, 10, 5)
+
+
+class _Resp:
+    def __init__(self, status, body=None, headers=None):
+        self.status_code, self.ok, self._body = status, status < 400, body
+        self.headers, self.text = headers or {}, str(body)
+
+    def json(self):
+        return self._body
+
+
+def test_limite_de_debit_nouvel_essai():
+    import marketdata.eex as eex_mod
+    body = payload("F7BM", "202611", [("2026-10-05", 154.22)])
+    responses = iter([_Resp(429, "Too Many Requests", {"Retry-After": "2"}), _Resp(503, "busy"), _Resp(200, body)])
+    waits = []
+    original = eex_mod.requests.get
+    eex_mod.requests.get = lambda *a, **k: next(responses)
+    try:
+        assert eex_mod.request_table({"shortCode": "F7BM", "maturity": "202611"}, sleep=waits.append) == body
+    finally:
+        eex_mod.requests.get = original
+    assert waits == [2.0, 30.0]        # Retry-After respecté, puis attente croissante
+
+
+def test_limite_de_debit_persistante_erreur():
+    import marketdata.eex as eex_mod
+    original = eex_mod.requests.get
+    eex_mod.requests.get = lambda *a, **k: _Resp(429, "Too Many Requests")
+    try:
+        with pytest.raises(DataNotFoundError, match="429"):
+            eex_mod.request_table({"shortCode": "F7BM", "maturity": "202611"}, max_retries=2,
+                                  sleep=lambda s: None)
+    finally:
+        eex_mod.requests.get = original
+
+
+def test_plusieurs_seances_une_requete_par_contrat():
+    from marketdata.eex import fetch_sessions
+    calls = []
+
+    def http(params):
+        calls.append((params["shortCode"], params["maturity"]))
+        return payload(params["shortCode"], params["maturity"],
+                       [("2026-10-01", 1.0), ("2026-10-02", 2.0), ("2026-10-05", 5.0)])
+    sessions = [date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 5)]
+    by_session = {s: listed_candidates("FR", s, 6, 7, 3) for s in sessions}
+    out = fetch_sessions(by_session, http, pause=0)
+    unique = {c for cs in by_session.values() for c in cs}
+    assert len(calls) == len(unique) < sum(len(cs) for cs in by_session.values())
+    assert set(out[date(2026, 10, 2)]["settlement"]) == {2.0}
