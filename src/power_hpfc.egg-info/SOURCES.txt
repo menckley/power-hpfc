@@ -1,5 +1,12 @@
 README.md
 pyproject.toml
+src/hpfc/__init__.py
+src/hpfc/calendar.py
+src/hpfc/calibration.py
+src/hpfc/config.py
+src/hpfc/constraints.py
+src/hpfc/shape.py
+src/hpfc/validation.py
 src/marketdata/__init__.py
 src/marketdata/eex.py
 src/marketdata/entsoe.py

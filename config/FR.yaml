@@ -1,0 +1,36 @@
+# Paramètres de la HPFC France. Toute modification change les courbes produites :
+# la version du fichier est enregistrée dans les métadonnées de chaque courbe.
+
+market: FR                 # code marché (EEX, archive)
+entsoe_area: FR            # zone de prix ENTSO-E (entsoe-py)
+holiday_country: FR        # calendrier des jours fériés (package holidays)
+tz: Europe/Paris
+unit: EUR/MWh
+
+peak:                      # convention EEX : lundi-vendredi, 8 h - 20 h, fériés inclus
+  start_hour: 8
+  end_hour: 20
+  weekdays: [0, 1, 2, 3, 4]
+  includes_holidays: true
+
+history:
+  start: 2019-01-01
+  excluded_periods:        # crise 2021-2023, retirée de la calibration
+    - [2021-09-01, 2023-06-30]
+
+products:                  # contrats EEX interrogés à chaque séance
+  n_months: 6
+  n_quarters: 7
+  n_years: 3
+  short_days: 11
+  short_window_days: 35
+
+shape:
+  intra_start: 2023-07-01  # profil intra-mensuel estimé sur la période récente (effet solaire)
+  min_obs: 10              # observations minimales par cellule (mois x type de jour x heure)
+  min_full_years: 3        # années complètes minimales pour la saisonnalité
+
+calibration:
+  arbitrage_tol: 0.01      # EUR/MWh : précision des settlements
+  level_tol: 0.01          # EUR/MWh : convergence des niveaux mensuels (méthode E)
+  max_iterations: 20
