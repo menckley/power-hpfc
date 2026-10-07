@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: power-hpfc
+Version: 0.1.0
+Summary: Hourly Price Forward Curve (power) et modules de données de marché réutilisables
+Requires-Python: >=3.11
+Requires-Dist: numpy>=1.26
+Requires-Dist: pandas>=2.2
+Requires-Dist: pyarrow>=15
+Requires-Dist: requests>=2.31
+Requires-Dist: entsoe-py>=0.6.19
+Requires-Dist: holidays>=0.50
+Requires-Dist: pyyaml>=6.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
