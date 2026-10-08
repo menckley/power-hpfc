@@ -32,6 +32,17 @@ curve = load_curve("FR", "2026-10-05")
 cal27 = load_settlements("FR", contract="Cal-27", profile="Base")
 ```
 
+## Application web
+
+```bash
+streamlit run app/streamlit_app.py      # en local, s'ouvre dans le navigateur
+```
+
+En ligne : Streamlit Community Cloud, dépôt `power-hpfc`, branche `main`,
+fichier principal `app/streamlit_app.py` (dépendances : `app/requirements.txt`).
+L'application lit directement le dossier `data/` du dépôt : chaque courbe poussée par
+le workflow quotidien y apparaît automatiquement.
+
 ## Règle de données
 
 Aucune donnée n'est inventée : toute donnée manquante ou incohérente lève

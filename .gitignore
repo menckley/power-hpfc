@@ -23,3 +23,6 @@ notebooks/data/
 
 # Écritures interrompues
 *.tmp
+
+# Extractions locales
+exports/
