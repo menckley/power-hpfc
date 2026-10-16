@@ -2,7 +2,8 @@
 
 En local, le paquet `pricer` installé dans l'environnement (pip install -e) est utilisé tel quel.
 En ligne (Streamlit Community Cloud), il est téléchargé au démarrage depuis le dépôt privé menckley/pricer avec
-le jeton en lecture seule `PRICER_TOKEN` des secrets de l'application ; il n'est jamais écrit dans un dépôt.
+le jeton `PRICER_TOKEN` des secrets de l'application (jamais écrit dans un dépôt). Le même jeton écrit le journal
+des pricings dans pricings/ du dépôt pricer : il lui faut Contents en lecture et écriture sur ce seul dépôt.
 """
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ def pricer_source() -> str:
         token = None
     if not token:
         raise RuntimeError("paquet pricer introuvable : l'installer en local (pip install -e pricer) ou ajouter "
-                           "le secret PRICER_TOKEN (jeton GitHub en lecture seule sur menckley/pricer)")
+                           "le secret PRICER_TOKEN (jeton GitHub sur menckley/pricer)")
     r = requests.get(f"https://api.github.com/repos/{PRICER_REPO}/tarball/{PRICER_REF}",
                      headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
                      timeout=60)
@@ -64,6 +65,7 @@ except Exception as exc:                             # message sans le jeton
 
 from pricer import archive                           # noqa: E402
 from pricer.hedging import STRATEGIES                # noqa: E402
+from pricer.journal import archive_to_github         # noqa: E402
 from pricer.market import Market                     # noqa: E402
 from pricer.products import (WEEKDAYS, as_swap, block, custom, eex, empty_grid,  # noqa: E402
                              quoted, read_profile_csv, weekly)
@@ -186,6 +188,17 @@ if margin_mode == "manual":
     manual_reason = m2.text_input("Reason (required)")
 
 
+def secret(name: str):
+    try:
+        return st.secrets.get(name)
+    except Exception:                                # pas de fichier de secrets
+        return None
+
+
+JOURNAL_TOKEN = secret("PRICER_TOKEN")              # même jeton : lecture du code et écriture du journal
+label_in = st.text_input("Deal label (client, reference…) — used in the pricing journal", value="")
+
+
 def build_product():
     if kind == "grid":
         p = weekly(mkt, start, end, mw, grid.set_axis(list(WEEKDAYS), axis=1), side)
@@ -202,14 +215,27 @@ def build_product():
     return as_swap(p) if settlement == "swap" else p
 
 
+if not JOURNAL_TOKEN:
+    st.caption("Automatic pricing journal on GitHub is off: add the PRICER_TOKEN secret (read and write on "
+               f"{PRICER_REPO}) to archive every pricing.")
 if st.button("Price", type="primary"):
+    st.session_state.pop("archived", None)
     try:
         with st.spinner("Pricing (hedging strategies, residual risk on the spot history)…"):
-            st.session_state.quote = quote(mkt, build_product(), settings, strategy, spot, manual_value,
-                                           manual_reason)
+            q_new = quote(mkt, build_product(), settings, strategy, spot, manual_value, manual_reason)
+        st.session_state.quote = q_new
+        st.session_state.label = label_in.strip() or q_new.product.name[:60]
     except (ValueError, KeyError, LookupError, FileNotFoundError) as exc:
         st.session_state.pop("quote", None)
         st.error(str(exc))
+    else:
+        if JOURNAL_TOKEN:
+            try:
+                with st.spinner(f"Archiving in {PRICER_REPO}/pricings…"):
+                    st.session_state.archived = archive_to_github(mkt, q_new, st.session_state.label,
+                                                                  PRICER_REPO, JOURNAL_TOKEN)
+            except (RuntimeError, ValueError, requests.RequestException) as exc:
+                st.session_state.archived = exc
 
 # ------------------------------------------------------------------ résultat
 q = st.session_state.get("quote")
@@ -223,6 +249,11 @@ if q is not None:
     k[3].metric("Hedging", q.context["strategy selected"])
     for msg in q.warnings:
         st.warning(msg)
+    arch = st.session_state.get("archived")
+    if isinstance(arch, Exception):
+        st.error(f"Pricing NOT archived on GitHub: {arch}")
+    elif arch is not None:
+        st.success(f"Archived in the pricing journal: [{arch.folder}]({arch.url}) (commit {arch.commit[:7]})")
 
     st.markdown("**Price build-up**")
     st.dataframe(q.lines.round(2), use_container_width=True)
@@ -247,7 +278,7 @@ if q is not None:
 
     # -------------------------------------------------------------- sauvegarde
     st.divider()
-    label = st.text_input("Label", value=q.product.name[:60])
+    label = st.session_state.get("label", q.product.name[:60])
     with tempfile.TemporaryDirectory() as tmp:
         try:
             path = archive.save_quote(mkt, q, label, root=Path(tmp))

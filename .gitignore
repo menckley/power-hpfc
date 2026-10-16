@@ -26,3 +26,6 @@ notebooks/data/
 
 # Extractions locales
 exports/
+
+# Secrets Streamlit locaux (jetons GitHub)
+.streamlit/secrets.toml
