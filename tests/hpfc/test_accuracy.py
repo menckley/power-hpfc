@@ -34,8 +34,8 @@ def _write_spot(root, last_full: date, partial_hours: int = 10):
     """Spot au quart d'heure (format de l'archive depuis le 01/10/2025), constant dans chaque heure :
     septembre et octobre 2026 jusqu'à `last_full`, puis `partial_hours` heures du jour suivant."""
     q = _utc(date(2026, 9, 1), last_full + timedelta(days=1), "15min")
-    q = q[q < pd.Timestamp(last_full + timedelta(days=1), tz=TZ).tz_convert("UTC")
-          + pd.Timedelta(hours=partial_hours)]
+    cutoff = pd.Timestamp(f"{last_full + timedelta(days=1)} {partial_hours:02d}:00", tz=TZ)   # sans calcul de durée
+    q = q[q < cutoff]
     s = pd.Series(_true_price(q.floor("h")), index=q, name="price")
     for month in ("2026-09", "2026-10"):
         part = s[s.index.tz_convert(TZ).strftime("%Y-%m") == month]

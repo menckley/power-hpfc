@@ -26,35 +26,64 @@ MARKET = "FR"
 
 
 # ------------------------------------------------------------------ paquet pricer
-@st.cache_resource(show_spinner="Chargement du pricer…")
-def pricer_source() -> str:
-    """Rend le paquet `pricer` importable ; renvoie son origine (« local » ou le commit téléchargé)."""
+DL_PREFIX = "pricer-dl-"
+
+
+def _token() -> str | None:
     try:
-        import pricer  # noqa: F401
-        return f"local ({Path(pricer.__file__).resolve().parents[2]})"
-    except ImportError:
-        pass
-    try:
-        token = st.secrets.get("PRICER_TOKEN")
+        return st.secrets.get("PRICER_TOKEN")
     except Exception:                                # pas de fichier de secrets en local
-        token = None
-    if not token:
-        raise RuntimeError("paquet pricer introuvable : l'installer en local (pip install -e pricer) ou ajouter "
-                           "le secret PRICER_TOKEN (jeton GitHub sur menckley/pricer)")
-    r = requests.get(f"https://api.github.com/repos/{PRICER_REPO}/tarball/{PRICER_REF}",
-                     headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
-                     timeout=60)
+        return None
+
+
+def _gh(path: str, accept: str, timeout: int = 60) -> requests.Response:
+    r = requests.get(f"https://api.github.com/repos/{PRICER_REPO}{path}", timeout=timeout,
+                     headers={"Authorization": f"Bearer {_token()}", "Accept": accept})
     if r.status_code != 200:
-        raise RuntimeError(f"téléchargement du dépôt {PRICER_REPO} refusé par GitHub (HTTP {r.status_code}) : "
+        raise RuntimeError(f"accès au dépôt {PRICER_REPO} refusé par GitHub (HTTP {r.status_code}) : "
                            "vérifier le jeton PRICER_TOKEN et son accès au dépôt")
-    dest = Path(tempfile.mkdtemp(prefix="pricer-"))
+    return r
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def pricer_head() -> str:
+    """Dernier commit de la branche du pricer (revérifié toutes les 5 minutes)."""
+    return _gh(f"/commits/{PRICER_REF}", "application/vnd.github.sha", timeout=20).text.strip()
+
+
+@st.cache_resource(show_spinner="Chargement du pricer…", max_entries=2)
+def pricer_download(sha: str) -> str:
+    """Code du pricer à ce commit, extrait dans un dossier temporaire ; renvoie le chemin de src/."""
+    r = _gh(f"/tarball/{sha}", "application/vnd.github+json")
+    dest = Path(tempfile.mkdtemp(prefix=DL_PREFIX))
     with tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz") as tar:
         members = [m for m in tar.getmembers() if m.isfile() or m.isdir()]     # ni liens ni fichiers spéciaux
         tar.extractall(dest, members=members, filter="data")
-    root = next(dest.iterdir())                      # dossier « menckley-pricer-<commit> »
-    sys.path.insert(0, str(root / "src"))
+    return str(next(dest.iterdir()) / "src")         # dossier « menckley-pricer-<commit> »
+
+
+def pricer_source() -> str:
+    """Rend le paquet `pricer` importable ; renvoie son origine (« local » ou le commit GitHub utilisé).
+
+    En ligne, le code suit le dernier commit du dépôt : après un push sur `pricer`, la nouvelle version est
+    chargée en moins de 5 minutes, sans redémarrer l'application (les modules de l'ancienne version sont
+    retirés avant l'import)."""
+    import importlib.util
+    spec = importlib.util.find_spec("pricer")
+    if spec is not None and DL_PREFIX not in str(spec.origin):
+        return f"local ({Path(spec.origin).resolve().parents[2]})"
+    if not _token():
+        raise RuntimeError("paquet pricer introuvable : l'installer en local (pip install -e pricer) ou ajouter "
+                           "le secret PRICER_TOKEN (jeton GitHub sur menckley/pricer)")
+    sha = pricer_head()
+    src = pricer_download(sha)
+    if not sys.path or sys.path[0] != src:
+        sys.path[:] = [x for x in sys.path if DL_PREFIX not in x]
+        for name in [m for m in sys.modules if m == "pricer" or m.startswith("pricer.")]:
+            del sys.modules[name]                   # ancienne version : réimportée depuis le nouveau commit
+        sys.path.insert(0, src)
     import pricer  # noqa: F401
-    return f"GitHub {PRICER_REPO}@{root.name.rsplit('-', 1)[-1]}"
+    return f"GitHub {PRICER_REPO}@{sha[:7]}"
 
 
 try:
@@ -95,7 +124,7 @@ def load_spot(signature: str, start: date) -> pd.Series:
 
 
 try:
-    signature = latest_curve()
+    signature = f"{latest_curve()}|{source}"        # nouvelle courbe ou nouveau code du pricer : recharger
     mkt = load_market(signature)
     settings = Settings.load()
     spot = load_spot(signature, settings.history_start)
@@ -221,9 +250,10 @@ if not JOURNAL_TOKEN:
 if st.button("Price", type="primary"):
     st.session_state.pop("archived", None)
     try:
-        with st.spinner("Pricing (hedging strategies, residual risk on the spot history)…"):
+        with st.spinner("Pricing (scenarios, residual risk and deviation premium on the spot history)…"):
             q_new = quote(mkt, build_product(), settings, strategy, spot, manual_value, manual_reason)
         st.session_state.quote = q_new
+        st.session_state.quote_source = source
         st.session_state.label = label_in.strip() or q_new.product.name[:60]
     except (ValueError, KeyError, LookupError, FileNotFoundError) as exc:
         st.session_state.pop("quote", None)
@@ -239,6 +269,9 @@ if st.button("Price", type="primary"):
 
 # ------------------------------------------------------------------ résultat
 q = st.session_state.get("quote")
+if q is not None and st.session_state.get("quote_source") != source:
+    q = None                                         # pricing fait avec une version précédente du pricer
+    st.session_state.pop("quote", None)
 if q is not None:
     st.divider()
     st.subheader(q.product.name)
