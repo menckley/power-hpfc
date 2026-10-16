@@ -5,6 +5,7 @@
   list         liste les courbes archivées
   curve        extrait une courbe archivée (csv ou parquet)
   settlements  extrait des settlements archivés
+  accuracy     précision des courbes archivées face au spot day-ahead réalisé (data/accuracy/)
 """
 from __future__ import annotations
 
@@ -14,8 +15,9 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from hpfc import archive, pipeline
+from hpfc import accuracy, archive, pipeline
 from hpfc.config import load_config
+from marketdata import DataNotFoundError
 
 
 def _date(s: str) -> date:
@@ -66,6 +68,9 @@ def main(argv=None) -> int:
     p.add_argument("--out")
     p.add_argument("--format", choices=["csv", "parquet"], default="csv")
 
+    p = sub.add_parser("accuracy")
+    p.add_argument("--market", default="FR")
+
     for sp in sub.choices.values():
         sp.add_argument("--root", default=str(archive.DATA_ROOT), help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -105,6 +110,16 @@ def main(argv=None) -> int:
                                       contract=args.contract, profile=args.profile, root=root)
         cols = ["session", "profile", "kind", "name", "code", "maturity", "start", "end", "settlement"]
         _write(df[cols].set_index("session"), args.out, args.format)
+        return 0
+    if args.cmd == "accuracy":
+        try:
+            df, summ = accuracy.run(load_config(args.market), root)
+        except DataNotFoundError as e:          # pas encore de jour livré : rien à écrire, pas une erreur
+            print(f"Précision non calculée : {e}")
+            return 0
+        print(f"Précision HPFC {args.market} : {len(df)} couples (courbe, jour livré), "
+              f"{df['curve_date'].nunique()} courbes, jusqu'au {df['delivery_date'].max()}")
+        print(summ.drop(columns=["first_delivery", "last_delivery"], errors="ignore").round(2).to_string())
         return 0
     return 2
 

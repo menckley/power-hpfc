@@ -64,7 +64,7 @@ except Exception as exc:                             # message sans le jeton
     st.stop()
 
 from pricer import archive                           # noqa: E402
-from pricer.hedging import STRATEGIES                # noqa: E402
+from pricer.hedging import FULL_DA, STRATEGIES       # noqa: E402
 from pricer.journal import archive_to_github         # noqa: E402
 from pricer.market import Market                     # noqa: E402
 from pricer.products import (WEEKDAYS, as_swap, block, custom, eex, empty_grid,  # noqa: E402
@@ -176,7 +176,7 @@ if kind == "eex":
     h1.info("Hedging: the listed contract itself (no strategy to choose)")
     strategy = "auto"
 else:
-    labels = {"auto": "Auto (least day-ahead volume)", **{k: k for k in STRATEGIES}}
+    labels = {"auto": "Auto (cheapest scenario)", **{k: k for k in (*STRATEGIES, FULL_DA)}}
     strategy = h1.selectbox("Hedging", list(labels), format_func=labels.get,
                             index=list(labels).index(settings.strategy))
 margin_mode = h2.radio("Margin", ["rules", "manual"], horizontal=True,
@@ -258,7 +258,7 @@ if q is not None:
     st.markdown("**Price build-up**")
     st.dataframe(q.lines.round(2), use_container_width=True)
     if len(q.strategies):
-        st.markdown("**Hedging strategies** — auto = least day-ahead volume, then lowest risk cost, "
+        st.markdown("**Scenarios compared** — auto = the cheapest; tie: least day-ahead volume, "
                     "then fewest contracts")
         st.dataframe(q.strategies.round(2), use_container_width=True)
     st.markdown("**EEX hedge** — position equivalent to the deal: hedge = trade the opposite side")
@@ -269,6 +269,13 @@ if q is not None:
         with st.expander(f"Residual risk: {q.risk.cost:,.0f} € (σ {q.risk.sigma:,.0f} €, "
                          f"confidence {q.risk.confidence:.0%})"):
             st.dataframe(q.risk.by_month.round(0), use_container_width=True)
+    if q.deviation is not None and len(q.deviation.by_month):
+        with st.expander(f"Day-ahead deviation premium: {q.deviation.cost:,.0f} € (σ {q.deviation.sigma:,.0f} €, "
+                         f"{q.deviation.method})"):
+            st.dataframe(q.deviation.by_month.round(2), use_container_width=True)
+            st.caption("Price-level risk of volumes bought or sold in day-ahead without EEX hedge, measured on "
+                       "a naive persistence forecast (conservative proxy, 2021-2023 crisis excluded by default). "
+                       "Will be replaced by the archived HPFC's measured error once the archive is long enough.")
     if len(q.financing):
         with st.expander("Funding of sourcing"):
             st.dataframe(q.financing.round(2), use_container_width=True)
