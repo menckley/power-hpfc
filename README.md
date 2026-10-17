@@ -56,8 +56,16 @@ Erreur = HPFC − day-ahead (positive : la courbe était trop haute).
 - Usage dans le pricer : quand l'historique sera assez long, ces erreurs remplaceront, horizon par horizon,
   l'approximation par persistance de la prime de déviation day-ahead.
 
-Page **HPFC accuracy** de l'application : tableau par horizon, période choisie (tout, 365, 90, 30 derniers jours),
-Base prévue face au réalisé à un horizon donné, dispersion des erreurs par horizon, export CSV.
+Page **HPFC accuracy** de l'application :
+- **vue d'un jour** : prix horaires prévus (courbe choisie : D-1, D-7…) face au day-ahead réalisé, précision du
+  modèle (MAE horaire ÷ prix moyen du jour, échelle de lecture propre à la page : < 10 % very good, 10-20 % good,
+  20-35 % fair, > 35 % poor), corrélation de forme, volatilité du marché (écart-type des prix horaires du jour,
+  comparé à sa médiane des 30 jours précédents) ;
+- tableau par horizon sur la période choisie (tout, 365, 90, 30 derniers jours), Base prévue face au réalisé à un
+  horizon donné, dispersion des erreurs par horizon, export CSV.
+
+À D+1, l'erreur de niveau est nulle par construction (le contrat EEX Day est réglé sur l'enchère day-ahead et la
+courbe est calée dessus) : seule la forme horaire est mesurée.
 
 ## Application web
 
@@ -70,7 +78,56 @@ fichier principal `app/streamlit_app.py` (dépendances : `app/requirements.txt`)
 L'application lit directement le dossier `data/` du dépôt : chaque courbe poussée par
 le workflow quotidien y apparaît automatiquement.
 
+| Page | Contenu |
+|---|---|
+| **Pricer** (accueil) | Pricing d'un deal avec le paquet du dépôt privé `pricer` (téléchargé avec le secret `PRICER_TOKEN`, rechargé moins de 5 minutes après un push qui modifie `src/` ou `config/` de `pricer`) ; archivage automatique dans le journal de `pricer` |
+| **Pricing history** | Tous les pricings du journal, détail de chacun, export de tous les pricings en CSV ou Excel (journal, construction du prix, scénarios, couverture, avertissements) |
+| **HPFC curves** | Extraction des courbes archivées |
+| **HPFC accuracy** | Précision des courbes face au day-ahead réalisé |
+
+Secret de l'application (Streamlit Cloud → Settings → Secrets, jamais dans un dépôt) : `PRICER_TOKEN`, jeton GitHub
+*fine-grained* limité à `menckley/pricer`, **Contents : Read and write**. En local : `.streamlit/secrets.toml`
+(ignoré par git) ou paquet `pricer` installé en mode éditable.
+
 ## Règle de données
 
 Aucune donnée n'est inventée : toute donnée manquante ou incohérente lève
 `DataNotFoundError` et arrête le traitement.
+
+## Feuille de route
+
+La feuille de route du pricer (options, TBx, flexibilité, produits structurés…) est dans le README du dépôt `pricer`.
+
+### Précision de la HPFC
+1. **Référence naïve** à côté de la HPFC (persistance : moyenne des 30 derniers jours corrigée de la saisonnalité,
+   et « même jour la semaine dernière ») et **score de compétence** = 1 − erreur HPFC ÷ erreur naïve : dit si la
+   courbe apporte quelque chose, pas seulement de combien elle se trompe.
+2. Erreur de forme **par heure de la journée** et **par saison** (où le profil se trompe : creux solaire, pointe du
+   soir, week-ends, fériés).
+3. Erreur de niveau par **horizon en mois** (Peak, Offpeak), au format attendu par la prime de déviation du pricer.
+4. Rapport hebdomadaire (résumé de la semaine écrite dans `data/accuracy/`) et alerte si l'erreur dérive.
+5. Comparaison au **quart d'heure** depuis le 01/10/2025.
+
+### Modèle HPFC
+6. Forme : tendance de la **cannibalisation solaire** (creux de midi qui se creuse d'année en année), ponts et
+   fériés, heures à prix négatifs.
+7. Météo gratuite (Open-Meteo) pour la forme des premiers jours (température, ensoleillement, vent).
+8. Lissage de la calibration (contrainte de régularité entre mois) et courbe au **pas de 15 minutes**.
+9. **Autres marchés** (Allemagne, Belgique, Espagne…) : nouveau `config/<marché>.yaml`, mêmes modules.
+
+### Données et exploitation
+10. **Alerte en cas d'échec du workflow** (notification GitHub ou e-mail) et contrôle qualité quotidien (séance
+    complète, spot complet, écarts aux settlements).
+11. Fusion avec `settlements-eex` (settlements et GO) dans l'application, puis une seule plateforme.
+12. **Taille de l'archive** : environ 0,8 Mo par courbe, soit 200 à 300 Mo par an ; la taille conseillée d'un dépôt
+    GitHub (de l'ordre de 1 Go, à vérifier) serait atteinte en 3 à 4 ans. À prévoir : ne garder en entier que les
+    courbes récentes (les plus anciennes réduites aux jours déjà livrés, seuls utiles à la précision) ou un
+    stockage externe.
+
+## Reprise après une pause
+
+- `git pull --rebase` avant toute modification : le workflow pousse un commit chaque jour.
+- Onglet **Actions** du dépôt : vérifier que les runs quotidiens sont verts (courbe et précision).
+- Vérifier que les secrets n'ont pas expiré : `ENTSOE_API_KEY` (secret GitHub du dépôt) et `PRICER_TOKEN`
+  (secret Streamlit).
+- Page **HPFC accuracy** : l'historique s'est allongé pendant la pause, regarder les horizons D+91 et au-delà.
