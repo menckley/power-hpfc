@@ -47,14 +47,19 @@ def _gh(path: str, accept: str, timeout: int = 60) -> requests.Response:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def pricer_head() -> str:
-    """Dernier commit de la branche du pricer (revérifié toutes les 5 minutes)."""
-    return _gh(f"/commits/{PRICER_REF}", "application/vnd.github.sha", timeout=20).text.strip()
+    """Version du code du pricer : derniers commits ayant modifié src/ et config/ (revérifiés toutes les
+    5 minutes). Les commits du journal des pricings (pricings/) ne déclenchent donc pas de rechargement."""
+    shas = []
+    for path in ("src", "config"):
+        r = _gh(f"/commits?sha={PRICER_REF}&path={path}&per_page=1", "application/vnd.github+json", timeout=20)
+        shas.append(r.json()[0]["sha"] if r.json() else "none")
+    return "-".join(s[:12] for s in shas)
 
 
 @st.cache_resource(show_spinner="Chargement du pricer…", max_entries=2)
-def pricer_download(sha: str) -> str:
-    """Code du pricer à ce commit, extrait dans un dossier temporaire ; renvoie le chemin de src/."""
-    r = _gh(f"/tarball/{sha}", "application/vnd.github+json")
+def pricer_download(version: str) -> str:
+    """Code du pricer (dernier commit de la branche) extrait dans un dossier temporaire ; renvoie src/."""
+    r = _gh(f"/tarball/{PRICER_REF}", "application/vnd.github+json")
     dest = Path(tempfile.mkdtemp(prefix=DL_PREFIX))
     with tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz") as tar:
         members = [m for m in tar.getmembers() if m.isfile() or m.isdir()]     # ni liens ni fichiers spéciaux
@@ -65,7 +70,7 @@ def pricer_download(sha: str) -> str:
 def pricer_source() -> str:
     """Rend le paquet `pricer` importable ; renvoie son origine (« local » ou le commit GitHub utilisé).
 
-    En ligne, le code suit le dernier commit du dépôt : après un push sur `pricer`, la nouvelle version est
+    En ligne, le code suit le dépôt : après un push qui modifie src/ ou config/ de `pricer`, la nouvelle version est
     chargée en moins de 5 minutes, sans redémarrer l'application (les modules de l'ancienne version sont
     retirés avant l'import)."""
     import importlib.util
@@ -75,15 +80,15 @@ def pricer_source() -> str:
     if not _token():
         raise RuntimeError("paquet pricer introuvable : l'installer en local (pip install -e pricer) ou ajouter "
                            "le secret PRICER_TOKEN (jeton GitHub sur menckley/pricer)")
-    sha = pricer_head()
-    src = pricer_download(sha)
+    version = pricer_head()
+    src = pricer_download(version)
     if not sys.path or sys.path[0] != src:
         sys.path[:] = [x for x in sys.path if DL_PREFIX not in x]
         for name in [m for m in sys.modules if m == "pricer" or m.startswith("pricer.")]:
             del sys.modules[name]                   # ancienne version : réimportée depuis le nouveau commit
         sys.path.insert(0, src)
     import pricer  # noqa: F401
-    return f"GitHub {PRICER_REPO}@{sha[:7]}"
+    return f"GitHub {PRICER_REPO}@{version[:7]}"
 
 
 try:

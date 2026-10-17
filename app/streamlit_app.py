@@ -1,4 +1,4 @@
-"""Application web : pricer (page d'accueil), courbes HPFC et précision de la HPFC.
+"""Application web : pricer (page d'accueil), historique des pricings, courbes HPFC et précision de la HPFC.
 
 En local :   streamlit run app/streamlit_app.py
 En ligne :   Streamlit Community Cloud, fichier principal app/streamlit_app.py
@@ -17,6 +17,7 @@ st.set_page_config(page_title="Power pricing desk", page_icon="⚡", layout="wid
 
 pages = [
     st.Page("pricer_page.py", title="Pricer", icon="💶", default=True),
+    st.Page("history_page.py", title="Pricing history", icon="🗂️"),
     st.Page("hpfc_page.py", title="HPFC curves", icon="📈"),
     st.Page("accuracy_page.py", title="HPFC accuracy", icon="🎯"),
 ]
