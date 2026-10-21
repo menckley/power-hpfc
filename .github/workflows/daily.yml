@@ -2,7 +2,7 @@ name: HPFC quotidienne
 
 on:
   schedule:
-    - cron: "0 6 * * *"        # chaque jour à 06:00 UTC (08:00 à Paris en été, 07:00 en hiver)
+    - cron: "0 5 * * *"        # chaque jour à 06:00 UTC (08:00 à Paris en été, 07:00 en hiver)
   workflow_dispatch:            # bouton « Run workflow » pour un lancement manuel
 
 permissions:
