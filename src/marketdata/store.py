@@ -28,4 +28,11 @@ def write_parquet(df: pd.DataFrame | pd.Series, path: str | Path) -> Path:
 
 
 def read_parquet(path: str | Path) -> pd.DataFrame:
-    return pd.read_parquet(Path(path))
+    """Lit un fichier Parquet, sans découverte de partitions.
+
+    Avec un chemin, pyarrow peut lire les dossiers « clé=valeur » du chemin comme des colonnes (partitionnement
+    Hive). Les settlements sont rangés dans session=AAAA-MM-JJ/ et contiennent aussi une colonne `session` :
+    selon la version de pyarrow, les deux entrent en conflit (ArrowTypeError). Le fichier est donc ouvert
+    explicitement : seul son contenu est lu."""
+    with open(Path(path), "rb") as f:
+        return pd.read_parquet(f)
