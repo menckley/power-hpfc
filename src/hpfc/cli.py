@@ -6,6 +6,7 @@
   curve        extrait une courbe archivée (csv ou parquet)
   settlements  extrait des settlements archivés
   accuracy     précision des courbes archivées face au spot day-ahead réalisé (data/accuracy/)
+  options      archive les settlements d'options EEX des ~45 derniers jours (data/eex/options/)
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from hpfc import accuracy, archive, pipeline
+from hpfc import accuracy, archive, options, pipeline
 from hpfc.config import load_config
 from marketdata import DataNotFoundError
 
@@ -71,6 +72,11 @@ def main(argv=None) -> int:
     p = sub.add_parser("accuracy")
     p.add_argument("--market", default="FR")
 
+    p = sub.add_parser("options")
+    p.add_argument("--market", default="FR")
+    p.add_argument("--lookback-days", type=int, default=45)
+    p.add_argument("--force", action="store_true", help="réécrit les séances déjà archivées")
+
     for sp in sub.choices.values():
         sp.add_argument("--root", default=str(archive.DATA_ROOT), help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -111,6 +117,11 @@ def main(argv=None) -> int:
         cols = ["session", "profile", "kind", "name", "code", "maturity", "start", "end", "settlement"]
         _write(df[cols].set_index("session"), args.out, args.format)
         return 0
+    if args.cmd == "options":
+        report = options.collect(args.market, lookback_days=args.lookback_days, root=root, force=args.force)
+        print(report.to_string(index=False))
+        return 0
+
     if args.cmd == "accuracy":
         try:
             df, summ = accuracy.run(load_config(args.market), root)

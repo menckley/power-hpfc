@@ -2,6 +2,7 @@
 
 data/
 ├── eex/settlements/market=FR/session=AAAA-MM-JJ/settlements.parquet
+├── eex/options/market=FR/session=AAAA-MM-JJ/options.parquet
 ├── entsoe/day_ahead/market=FR/month=AAAA-MM/day_ahead.parquet
 └── curves/market=FR/pricing_date=AAAA-MM-JJ/{curve.parquet, metadata.json}
 """
@@ -63,6 +64,41 @@ def load_settlements(market: str, session=None, start=None, end=None, contract: 
     if quoted_only:
         df = df[df["settlement"].notna()]
     return df.sort_values(["session", "profile", "start"]).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------- options EEX
+def options_path(market: str, session: date, root: Path = DATA_ROOT) -> Path:
+    return partition_dir(root, "eex/options", market=market, session=f"{_d(session)}") / "options.parquet"
+
+
+def save_options(df: pd.DataFrame, market: str, session: date, root: Path = DATA_ROOT) -> Path:
+    return write_parquet(df.reset_index(drop=True), options_path(market, session, root))
+
+
+def list_option_sessions(market: str, root: Path = DATA_ROOT) -> list[date]:
+    base = partition_dir(root, "eex/options", market=market)
+    return sorted(_d(p.name.split("=", 1)[1]) for p in base.glob("session=*") if (p / "options.parquet").exists())
+
+
+def load_options(market: str, session=None, start=None, end=None, name: str | None = None,
+                 root: Path = DATA_ROOT) -> pd.DataFrame:
+    """Settlements d'options archivés : une séance ou une plage [start, end], éventuellement une série
+    (ex. "Cal-27", "M01-27", "Q1-27"). Une ligne par (séance, série, strike) : call, put, volumes, open interest."""
+    sessions = list_option_sessions(market, root)
+    if session is not None:
+        sessions = [s for s in sessions if s == _d(session)]
+    if start is not None:
+        sessions = [s for s in sessions if s >= _d(start)]
+    if end is not None:
+        sessions = [s for s in sessions if s <= _d(end)]
+    if not sessions:
+        raise DataNotFoundError(f"aucune séance d'options archivée pour {market} sur la période demandée")
+    df = pd.concat([read_parquet(options_path(market, s, root)) for s in sessions], ignore_index=True)
+    for col in ("start", "end", "session"):
+        df[col] = pd.to_datetime(df[col]).dt.date
+    if name is not None:
+        df = df[df["name"] == name]
+    return df.reset_index(drop=True)
 
 
 # ---------------------------------------------------------------- courbes

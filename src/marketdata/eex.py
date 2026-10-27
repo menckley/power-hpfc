@@ -150,7 +150,7 @@ def _retry_wait(response, attempt: int, backoff: float) -> float:
 
 
 def request_table(params: dict, timeout: int = 30, max_retries: int = 6, backoff: float = 15.0,
-                  sleep: Callable[[float], None] = time.sleep) -> dict:
+                  sleep: Callable[[float], None] = time.sleep, url: str = API_URL) -> dict:
     """Appel brut de l'API table-data : JSON tel quel, ou erreur explicite.
 
     Limite de débit (HTTP 429) ou erreur serveur (5xx) : nouvel essai après une attente
@@ -159,7 +159,7 @@ def request_table(params: dict, timeout: int = 30, max_retries: int = 6, backoff
     label = f"EEX {params.get('shortCode')} {params.get('maturity')}"
     for attempt in range(max_retries + 1):
         try:
-            r = requests.get(API_URL, params=params, headers=HEADERS, timeout=timeout)
+            r = requests.get(url, params=params, headers=HEADERS, timeout=timeout)
         except requests.RequestException as exc:
             if attempt == max_retries:
                 raise DataNotFoundError(f"{label} : requête impossible : {exc!r}") from exc

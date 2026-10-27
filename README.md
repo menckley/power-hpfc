@@ -23,6 +23,7 @@ python -m hpfc.cli list                                  # courbes archivées
 python -m hpfc.cli curve --date 2026-10-05 --out c.csv   # extraction d'une courbe
 python -m hpfc.cli settlements --contract Cal-27 --profile Base --out cal27.csv
 python -m hpfc.cli accuracy                              # précision des courbes face au day-ahead réalisé
+python -m hpfc.cli options                               # archive les settlements d'options EEX (~45 jours)
 ```
 
 En Python :
@@ -31,6 +32,35 @@ En Python :
 from hpfc.archive import load_curve, load_settlements, load_spot
 curve = load_curve("FR", "2026-10-05")
 cal27 = load_settlements("FR", contract="Cal-27", profile="Base")
+```
+
+## Settlements d'options EEX
+
+Chaque jour, le workflow archive aussi les settlements des **options EEX sur les futures Base France**
+(`python -m hpfc.cli options`) dans `data/eex/options/market=FR/session=AAAA-MM-JJ/options.parquet` : une ligne
+par (série, strike) avec le settlement du call et du put, les volumes et les open interests. L'API EEX ne garde
+qu'environ 45 jours : la première exécution récupère tout ce qui est encore disponible, les suivantes complètent.
+
+| Série | Code EEX | Maturités négociables |
+|---|---|---|
+| Mois | O7FM | 9 prochains mois |
+| Trimestre | O7FQ | 6 prochains trimestres |
+| Année | O7FY | 4 prochaines années |
+
+- Codes et format vérifiés sur des réponses réelles le 27/10/2026 ; options sur futures Base uniquement (pas
+  d'options Peak sur EEX).
+- Une séance n'est archivée que si elle n'est pas plus récente que la dernière séance de futures archivée (futures
+  et options sont publiés ensemble) ; une requête en échec n'écrit rien ; une séance archivée n'est pas réécrite.
+- **Volumes et open interest nuls** à la date du relevé : ces settlements sont des valorisations EEX, pas des prix
+  traités. Contrôles relevés sur le Cal-27 du 26/10/2026 : parité call − put = F − K exacte (sans actualisation,
+  F = 121,35), calls décroissants et convexes au millième près ; volatilité implicite ≈ 31 % à la monnaie, très
+  forte pente vers les bas strikes (149 % à K = 42) ; aucun strike au-dessus du future.
+
+En Python :
+
+```python
+from hpfc.archive import load_options
+cal27 = load_options("FR", name="Cal-27")             # toutes les séances archivées
 ```
 
 ## Précision de la HPFC
