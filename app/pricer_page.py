@@ -104,6 +104,10 @@ from pricer.market import Market                     # noqa: E402
 from pricer.products import (WEEKDAYS, as_swap, block, custom, eex, empty_grid,  # noqa: E402
                              quoted, read_profile_csv, weekly)
 from pricer.quote import quote                       # noqa: E402
+try:                                                 # pricer ≥ 0.6 : contrats indexés spot
+    from pricer.indexation import quote_indexed      # noqa: E402
+except ImportError:
+    quote_indexed = None
 from pricer.risk import history_bounds               # noqa: E402
 from pricer.settings import Settings                 # noqa: E402
 
@@ -149,11 +153,19 @@ if todo:
 PRODUCTS = {"Weekly profile (grid)": "grid", "Block (Base / Peak / Offpeak)": "block",
             "Listed EEX contract": "eex", "Hourly profile (CSV)": "csv"}
 
+PRICE_TYPES = {"fixed": "Fixed price", "indexed": "EPEX spot indexed (spot + spread)"}
+price_type = st.radio("Price type", list(PRICE_TYPES) if quote_indexed else ["fixed"], horizontal=True,
+                      format_func=PRICE_TYPES.get)
+indexed = price_type == "indexed"
 c1, c2, c3 = st.columns(3)
 side = c1.radio("Side", ["sell", "buy"], horizontal=True,
                 format_func=lambda s: {"sell": "Sell (to client)", "buy": "Buy (from counterparty)"}[s])
-settlement = c2.radio("Settlement", ["physical", "swap"], horizontal=True,
-                      format_func=lambda s: {"physical": "Physical delivery", "swap": "Financial swap"}[s])
+if indexed:
+    c2.info("Settlement: physical delivery (spot indexation)")
+    settlement = "physical"
+else:
+    settlement = c2.radio("Settlement", ["physical", "swap"], horizontal=True,
+                          format_func=lambda s: {"physical": "Physical delivery", "swap": "Financial swap"}[s])
 kind = PRODUCTS[c3.selectbox("Product", list(PRODUCTS))]
 
 default_start = max(mkt.first_day, date(mkt.first_day.year + 1, 1, 1))
@@ -206,7 +218,11 @@ if kind == "csv":
     upload = st.file_uploader("Hourly profile CSV (columns: horodatage with time zone, mw)", type="csv")
 
 h1, h2 = st.columns(2)
-if kind == "eex":
+if indexed:
+    h1.info("No hedge: every delivered hour is bought (or sold) in day-ahead at the index. Monthly index = "
+            "average EPEX day-ahead price over the delivered hours, weighted by their MWh, rounded up to the cent.")
+    strategy = "auto"
+elif kind == "eex":
     h1.info("Hedging: the listed contract itself (no strategy to choose)")
     strategy = "auto"
 else:
@@ -256,7 +272,10 @@ if st.button("Price", type="primary"):
     st.session_state.pop("archived", None)
     try:
         with st.spinner("Pricing (scenarios, residual risk and deviation premium on the spot history)…"):
-            q_new = quote(mkt, build_product(), settings, strategy, spot, manual_value, manual_reason)
+            if indexed:
+                q_new = quote_indexed(mkt, build_product(), settings, manual_value, manual_reason)
+            else:
+                q_new = quote(mkt, build_product(), settings, strategy, spot, manual_value, manual_reason)
         st.session_state.quote = q_new
         st.session_state.quote_source = source
         st.session_state.label = label_in.strip() or q_new.product.name[:60]
@@ -281,10 +300,18 @@ if q is not None:
     st.divider()
     st.subheader(q.product.name)
     k = st.columns(4)
-    k[0].metric("Offer price", f"{q.price:,.2f} €/MWh")
-    k[1].metric("Fair price", f"{q.fair_price:,.2f} €/MWh")
-    k[2].metric("Volume", f"{q.volume:,.0f} MWh")
-    k[3].metric("Hedging", q.context["strategy selected"])
+    terms = getattr(q, "indexation", None)
+    if terms is not None:
+        k[0].metric("Indexed price", terms["formula"].replace("EPEX spot day-ahead", "EPEX spot"))
+        k[1].metric("Expected all-in price (HPFC)", f"{q.price:,.2f} €/MWh",
+                    help="Index expected at the HPFC ± quoted spread: an estimate, the client pays the realised index.")
+        k[2].metric("Volume", f"{q.volume:,.0f} MWh")
+        k[3].metric("Spread exact", f"{terms['spread exact €/MWh']:.4f} €/MWh")
+    else:
+        k[0].metric("Offer price", f"{q.price:,.2f} €/MWh")
+        k[1].metric("Fair price", f"{q.fair_price:,.2f} €/MWh")
+        k[2].metric("Volume", f"{q.volume:,.0f} MWh")
+        k[3].metric("Hedging", q.context["strategy selected"])
     for msg in q.warnings:
         st.warning(msg)
     arch = st.session_state.get("archived")
@@ -293,16 +320,25 @@ if q is not None:
     elif arch is not None:
         st.success(f"Archived in the pricing journal: [{arch.folder}]({arch.url}) (commit {arch.commit[:7]})")
 
-    st.markdown("**Price build-up**")
-    st.dataframe(q.lines.round(2), use_container_width=True)
+    if terms is not None:
+        st.markdown("**Spread build-up**")
+        st.dataframe(q.lines.round(4), use_container_width=True)
+        st.markdown("**Index by delivery month** — expected at the HPFC (the invoice uses the realised spot)")
+        st.dataframe(terms["by_month"].round(2), use_container_width=True)
+        st.caption(f"Index: {terms['index']}.")
+    else:
+        st.markdown("**Price build-up**")
+        st.dataframe(q.lines.round(2), use_container_width=True)
     if len(q.strategies):
         st.markdown("**Scenarios compared** — auto = the cheapest; tie: least day-ahead volume, "
                     "then fewest contracts")
         st.dataframe(q.strategies.round(2), use_container_width=True)
-    st.markdown("**EEX hedge** — position equivalent to the deal: hedge = trade the opposite side")
-    st.dataframe(q.hedge.table.round(2), use_container_width=True)
-    with st.expander("Hedge and residual details"):
-        st.dataframe(pd.Series(q.hedge_values, name="value").to_frame().round(2), use_container_width=True)
+    if len(q.hedge.table):
+        st.markdown("**EEX hedge** — position equivalent to the deal: hedge = trade the opposite side")
+        st.dataframe(q.hedge.table.round(2), use_container_width=True)
+    if terms is None:
+        with st.expander("Hedge and residual details"):
+            st.dataframe(pd.Series(q.hedge_values, name="value").to_frame().round(2), use_container_width=True)
     if len(q.risk.by_month):
         with st.expander(f"Residual risk: {q.risk.cost:,.0f} € (σ {q.risk.sigma:,.0f} €, "
                          f"confidence {q.risk.confidence:.0%})"):

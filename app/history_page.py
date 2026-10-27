@@ -191,6 +191,8 @@ else:
     st.caption(f"{p['name']} · {p['side']} · {'physical' if p['physical'] else 'financial swap'} · delivery "
                f"{p['delivery_start']} → {p['delivery_end']} · HPFC of {d['curve']['pricing_date']} · "
                f"pricer {d.get('pricer_version', '—')}")
+    if d.get("indexation"):
+        st.info(f"Indexed price: **{d['indexation']['formula']}** — {d['indexation'].get('index', '')}")
     for w in d.get("warnings") or []:
         st.warning(w)
     st.markdown("**Price build-up**")
