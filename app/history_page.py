@@ -191,6 +191,11 @@ else:
     st.caption(f"{p['name']} · {p['side']} · {'physical' if p['physical'] else 'financial swap'} · delivery "
                f"{p['delivery_start']} → {p['delivery_end']} · HPFC of {d['curve']['pricing_date']} · "
                f"pricer {d.get('pricer_version', '—')}")
+    if d.get("option"):
+        o = d["option"]
+        st.info(f"Option: **{o['formula']}** — expiry {o['expiry']}, F {o['forward €/MWh']:.2f} €/MWh")
+        if o.get("legs"):
+            st.dataframe(pd.DataFrame(o["legs"]).set_index("leg").round(4), use_container_width=True)
     if d.get("indexation"):
         st.info(f"Indexed price: **{d['indexation']['formula']}** — {d['indexation'].get('index', '')}")
     for w in d.get("warnings") or []:

@@ -16,6 +16,7 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 
@@ -104,6 +105,10 @@ from pricer.market import Market                     # noqa: E402
 from pricer.products import (WEEKDAYS, as_swap, block, custom, eex, empty_grid,  # noqa: E402
                              quoted, read_profile_csv, weekly)
 from pricer.quote import quote                       # noqa: E402
+try:                                                 # pricer ≥ 0.7 : options EEX
+    from pricer.option_quote import LABELS as OPTION_LABELS, option_series, quote_option  # noqa: E402
+except ImportError:
+    quote_option = None
 try:                                                 # pricer ≥ 0.6 : contrats indexés spot
     from pricer.indexation import quote_indexed      # noqa: E402
 except ImportError:
@@ -153,20 +158,52 @@ if todo:
 PRODUCTS = {"Weekly profile (grid)": "grid", "Block (Base / Peak / Offpeak)": "block",
             "Listed EEX contract": "eex", "Hourly profile (CSV)": "csv"}
 
-PRICE_TYPES = {"fixed": "Fixed price", "indexed": "EPEX spot indexed (spot + spread)"}
-price_type = st.radio("Price type", list(PRICE_TYPES) if quote_indexed else ["fixed"], horizontal=True,
-                      format_func=PRICE_TYPES.get)
+PRICE_TYPES = {"fixed": "Fixed price", "indexed": "EPEX spot indexed (spot + spread)",
+               "option": "Option on EEX Base future"}
+available_types = ["fixed"] + (["indexed"] if quote_indexed else []) + (["option"] if quote_option else [])
+price_type = st.radio("Price type", available_types, horizontal=True, format_func=PRICE_TYPES.get)
 indexed = price_type == "indexed"
+is_option = price_type == "option"
 c1, c2, c3 = st.columns(3)
 side = c1.radio("Side", ["sell", "buy"], horizontal=True,
                 format_func=lambda s: {"sell": "Sell (to client)", "buy": "Buy (from counterparty)"}[s])
 if indexed:
     c2.info("Settlement: physical delivery (spot indexation)")
     settlement = "physical"
+elif is_option:
+    c2.info("European option on the EEX Base future (premium per MWh of the underlying)")
+    settlement = "swap"
 else:
     settlement = c2.radio("Settlement", ["physical", "swap"], horizontal=True,
                           format_func=lambda s: {"physical": "Physical delivery", "swap": "Financial swap"}[s])
-kind = PRODUCTS[c3.selectbox("Product", list(PRODUCTS))]
+if is_option:
+    kind = "option"
+    try:
+        series_table = option_series(mkt)
+    except (LookupError, ValueError) as exc:
+        series_table = None
+        st.error(f"Options not available: {exc}")
+    if series_table is None or series_table.empty:
+        if series_table is not None:
+            st.error(f"No EEX option settlements archived for the session {mkt.pricing_date}.")
+        st.stop()
+    structure = c3.selectbox("Structure", list(OPTION_LABELS), format_func=OPTION_LABELS.get)
+    o1, o2, o3 = st.columns(3)
+    series_name = o1.selectbox("Underlying future (Base)", list(series_table["name"]),
+                               format_func=lambda n: f"{n} — F {series_table.set_index('name').loc[n, 'settlement']:.2f}"
+                                                     f" · expiry {series_table.set_index('name').loc[n, 'expiry']:%d/%m/%Y}")
+    fwd = float(series_table.set_index("name").loc[series_name, "settlement"])
+    if structure == "collar":
+        strike_low = o2.number_input("Floor strike (put) €/MWh", min_value=0.01, value=float(round(fwd - 10)), step=1.0)
+        strike_high = o3.number_input("Cap strike (call) €/MWh", min_value=0.01, value=float(round(fwd + 10)), step=1.0)
+        strike_one = None
+    else:
+        strike_one = o2.number_input("Strike €/MWh", min_value=0.01, value=float(round(fwd)), step=1.0)
+        strike_low = strike_high = None
+    mw = o3.number_input("Power MW", min_value=0.1, value=1.0, step=0.5) if structure != "collar" else \
+        st.number_input("Power MW", min_value=0.1, value=1.0, step=0.5)
+else:
+    kind = PRODUCTS[c3.selectbox("Product", list(PRODUCTS))]
 
 default_start = max(mkt.first_day, date(mkt.first_day.year + 1, 1, 1))
 if kind in ("grid", "block"):
@@ -218,7 +255,11 @@ if kind == "csv":
     upload = st.file_uploader("Hourly profile CSV (columns: horodatage with time zone, mw)", type="csv")
 
 h1, h2 = st.columns(2)
-if indexed:
+if is_option:
+    h1.info("Volatility implied from the EEX option settlements of the session (recomputed at each pricing), "
+            "compared with the historical volatility of the future.")
+    strategy = "auto"
+elif indexed:
     h1.info("No hedge: every delivered hour is bought (or sold) in day-ahead at the index. Monthly index = "
             "average EPEX day-ahead price over the delivered hours, weighted by their MWh, rounded up to the cent.")
     strategy = "auto"
@@ -272,7 +313,11 @@ if st.button("Price", type="primary"):
     st.session_state.pop("archived", None)
     try:
         with st.spinner("Pricing (scenarios, residual risk and deviation premium on the spot history)…"):
-            if indexed:
+            if is_option:
+                q_new = quote_option(mkt, structure, series_name, mw, side, settings, strike=strike_one,
+                                     strike_low=strike_low, strike_high=strike_high,
+                                     manual_margin_eur_mwh=manual_value, manual_reason=manual_reason)
+            elif indexed:
                 q_new = quote_indexed(mkt, build_product(), settings, manual_value, manual_reason)
             else:
                 q_new = quote(mkt, build_product(), settings, strategy, spot, manual_value, manual_reason)
@@ -301,7 +346,15 @@ if q is not None:
     st.subheader(q.product.name)
     k = st.columns(4)
     terms = getattr(q, "indexation", None)
-    if terms is not None:
+    opt = getattr(q, "option", None)
+    if opt is not None:
+        k[0].metric("Offer premium", f"{q.price:,.3f} €/MWh", help="Paid by the client if positive (per MWh of the "
+                    "underlying future).")
+        k[1].metric("Fair premium (EEX vol)", f"{q.fair_price:,.3f} €/MWh")
+        k[2].metric("Total premium", f"{q.price * q.volume:,.0f} €", help=f"{q.volume:,.0f} MWh underlying")
+        k[3].metric("Expiry", f"{date.fromisoformat(opt['expiry']):%d/%m/%Y}", help=f"T = {opt['T years']:.4f} years "
+                    f"(ACT/365) · F = {opt['forward €/MWh']:.2f} €/MWh")
+    elif terms is not None:
         k[0].metric("Indexed price", terms["formula"].replace("EPEX spot day-ahead", "EPEX spot"))
         k[1].metric("Expected all-in price (HPFC)", f"{q.price:,.2f} €/MWh",
                     help="Index expected at the HPFC ± quoted spread: an estimate, the client pays the realised index.")
@@ -320,7 +373,39 @@ if q is not None:
     elif arch is not None:
         st.success(f"Archived in the pricing journal: [{arch.folder}]({arch.url}) (commit {arch.commit[:7]})")
 
-    if terms is not None:
+    if opt is not None:
+        st.markdown("**Premium build-up**")
+        st.dataframe(q.lines.round(3), use_container_width=True)
+        st.markdown("**Legs** — client positions; greeks per MWh, vega per vol point, theta per day")
+        st.dataframe(opt["legs"].round(4), use_container_width=True)
+        cmp = opt["comparison"]
+        st.markdown("**EEX implied vs historical volatility**")
+        if "premium historical vol €/MWh" in cmp:
+            c = st.columns(3)
+            c[0].metric("Premium at EEX implied vol", f"{cmp['premium EEX vol €/MWh']:,.3f} €/MWh")
+            c[1].metric("Premium at historical vol", f"{cmp['premium historical vol €/MWh']:,.3f} €/MWh",
+                        help=f"σ {100 * opt['historical']['sigma']:.1f} % ± {100 * opt['historical']['standard error']:.1f} "
+                             f"on {opt['historical']['returns']} daily returns")
+            c[2].metric("Difference", f"{cmp['difference €/MWh']:+,.3f} €/MWh",
+                        None if cmp.get("difference %") is None else f"{cmp['difference %']:+.1f} %", delta_color="off")
+        else:
+            st.info(f"Historical volatility {cmp['historical vol']}"
+                    + (f" (current estimate {100 * opt['historical']['sigma estimate']:.1f} %, indicative only)"
+                       if opt["historical"].get("sigma estimate") else ""))
+        sm = opt["smile"]
+        fig = go.Figure()
+        fig.add_scatter(x=sm["strike"], y=100 * sm["vol"], mode="lines+markers", name="EEX implied vol")
+        for leg in opt["legs"].itertuples():
+            fig.add_vline(x=leg.strike, line_dash="dot", annotation_text=leg.Index)
+        if opt["historical"].get("sigma"):
+            fig.add_hline(y=100 * opt["historical"]["sigma"], line_dash="dash", annotation_text="historical vol")
+        fig.add_vline(x=opt["forward €/MWh"], line_color="gray", annotation_text="F")
+        fig.update_layout(height=360, xaxis_title="Strike €/MWh", yaxis_title="Implied volatility %",
+                          margin=dict(t=30, b=20))
+        st.plotly_chart(fig, use_container_width=True)
+        with st.expander("Quality checks of the EEX option settlements"):
+            st.json(opt["checks"], expanded=True)
+    elif terms is not None:
         st.markdown("**Spread build-up**")
         st.dataframe(q.lines.round(4), use_container_width=True)
         st.markdown("**Index by delivery month** — expected at the HPFC (the invoice uses the realised spot)")
@@ -336,7 +421,7 @@ if q is not None:
     if len(q.hedge.table):
         st.markdown("**EEX hedge** — position equivalent to the deal: hedge = trade the opposite side")
         st.dataframe(q.hedge.table.round(2), use_container_width=True)
-    if terms is None:
+    if terms is None and opt is None:
         with st.expander("Hedge and residual details"):
             st.dataframe(pd.Series(q.hedge_values, name="value").to_frame().round(2), use_container_width=True)
     if len(q.risk.by_month):
