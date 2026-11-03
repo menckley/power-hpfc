@@ -24,6 +24,7 @@ python -m hpfc.cli curve --date 2026-10-05 --out c.csv   # extraction d'une cour
 python -m hpfc.cli settlements --contract Cal-27 --profile Base --out cal27.csv
 python -m hpfc.cli accuracy                              # précision des courbes face au day-ahead réalisé
 python -m hpfc.cli options                               # archive les settlements d'options EEX (~45 jours)
+python -m hpfc.cli estr                                  # complète le journal des €STR de la BCE
 ```
 
 En Python :
@@ -62,6 +63,17 @@ En Python :
 from hpfc.archive import load_options
 cal27 = load_options("FR", name="Cal-27")             # toutes les séances archivées
 ```
+
+## Journal des €STR (BCE)
+
+Chaque jour, le workflow complète `data/ecb/estr.csv` (colonnes `date`, `estr_pct`) avec les €STR publiés par la BCE
+depuis la dernière date archivée (`python -m hpfc.cli estr` ; au premier lancement, tout l'historique depuis le
+02/10/2019). Les valeurs archivées ne sont jamais réécrites ; une valeur révisée par la BCE arrête la commande pour
+vérification. API en panne (504…) : trois nouveaux essais, puis échec de l'étape sans bloquer le workflow ; le run
+suivant rattrape les jours manquants.
+
+Le pricer interroge d'abord l'API de la BCE ; si elle est indisponible, il prend le dernier €STR de ce journal
+antérieur ou égal à la date de pricing et l'indique dans le résultat.
 
 ## Précision de la HPFC
 

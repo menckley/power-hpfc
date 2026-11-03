@@ -3,6 +3,7 @@
 data/
 ├── eex/settlements/market=FR/session=AAAA-MM-JJ/settlements.parquet
 ├── eex/options/market=FR/session=AAAA-MM-JJ/options.parquet
+├── ecb/estr.csv                    (journal des €STR publiés par la BCE)
 ├── entsoe/day_ahead/market=FR/month=AAAA-MM/day_ahead.parquet
 └── curves/market=FR/pricing_date=AAAA-MM-JJ/{curve.parquet, metadata.json}
 """
@@ -64,6 +65,44 @@ def load_settlements(market: str, session=None, start=None, end=None, contract: 
     if quoted_only:
         df = df[df["settlement"].notna()]
     return df.sort_values(["session", "profile", "start"]).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------- €STR (BCE)
+def estr_path(root: Path = DATA_ROOT) -> Path:
+    return Path(root) / "ecb" / "estr.csv"
+
+
+def load_estr(root: Path = DATA_ROOT) -> pd.Series:
+    """Journal des €STR archivés (index : date de publication, valeur en %)."""
+    path = estr_path(root)
+    if not path.exists():
+        raise DataNotFoundError("aucun €STR archivé")
+    df = pd.read_csv(path)
+    return pd.Series(df["estr_pct"].astype(float).to_numpy(), index=[_d(x) for x in df["date"]],
+                     name="estr_pct").sort_index()
+
+
+def save_estr(new: pd.Series, root: Path = DATA_ROOT) -> int:
+    """Ajoute au journal les dates encore absentes (les valeurs déjà archivées ne sont jamais réécrites).
+    Erreur si la BCE publie une valeur différente pour une date déjà archivée. Renvoie le nombre de dates ajoutées."""
+    try:
+        old = load_estr(root)
+    except DataNotFoundError:
+        old = pd.Series(dtype=float, name="estr_pct")
+    common = old.index.intersection(new.index)
+    changed = [d for d in common if abs(old[d] - new[d]) > 1e-9]
+    if changed:
+        raise DataNotFoundError(f"€STR révisé par la BCE pour {changed[:3]} : vérifier avant de modifier l'archive")
+    add = new[~new.index.isin(old.index)]
+    if add.empty:
+        return 0
+    allv = pd.concat([old, add]).sort_index()
+    path = estr_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".csv.tmp")
+    pd.DataFrame({"date": [str(d) for d in allv.index], "estr_pct": allv.to_numpy()}).to_csv(tmp, index=False)
+    tmp.replace(path)
+    return len(add)
 
 
 # ---------------------------------------------------------------- options EEX

@@ -39,6 +39,10 @@ jobs:
           ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
         run: python -m hpfc.cli run --market FR
 
+      - name: Compléter le journal des €STR (BCE)
+        continue-on-error: true     # API BCE en panne : rattrapé au prochain run, sans trou
+        run: python -m hpfc.cli estr
+
       - name: Archiver les settlements d'options EEX
         continue-on-error: true     # n'empêche jamais l'archivage de la courbe du jour
         run: python -m hpfc.cli options --market FR

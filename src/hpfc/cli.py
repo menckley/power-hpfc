@@ -7,13 +7,14 @@
   settlements  extrait des settlements archivés
   accuracy     précision des courbes archivées face au spot day-ahead réalisé (data/accuracy/)
   options      archive les settlements d'options EEX des ~45 derniers jours (data/eex/options/)
+  estr         complète le journal des €STR de la BCE (data/ecb/estr.csv)
 """
 from __future__ import annotations
 
 import argparse
 import logging
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from hpfc import accuracy, archive, options, pipeline
@@ -72,6 +73,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("accuracy")
     p.add_argument("--market", default="FR")
 
+    p = sub.add_parser("estr")
+
     p = sub.add_parser("options")
     p.add_argument("--market", default="FR")
     p.add_argument("--lookback-days", type=int, default=45)
@@ -117,6 +120,23 @@ def main(argv=None) -> int:
         cols = ["session", "profile", "kind", "name", "code", "maturity", "start", "end", "settlement"]
         _write(df[cols].set_index("session"), args.out, args.format)
         return 0
+    if args.cmd == "estr":
+        from marketdata import ecb
+        try:
+            last = max(archive.load_estr(root).index)
+            start = last + timedelta(days=1)
+        except DataNotFoundError:
+            start = ecb.ESTR_START
+        end = date.today()
+        if start > end:
+            print("Journal €STR déjà à jour")
+            return 0
+        added = archive.save_estr(ecb.fetch_estr(start, end), root)
+        s = archive.load_estr(root)
+        print(f"€STR : {added} valeur(s) ajoutée(s) ; journal du {s.index[0]} au {s.index[-1]} "
+              f"(dernière : {s.iloc[-1]:.3f} %)")
+        return 0
+
     if args.cmd == "options":
         report = options.collect(args.market, lookback_days=args.lookback_days, root=root, force=args.force)
         print(report.to_string(index=False))
