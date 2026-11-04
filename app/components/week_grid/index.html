@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg: #ffffff; --fg: #31333f; --line: rgba(128,128,128,.35); --on: #ff4b4b;
+          --preview-off: rgba(128,128,128,.35); --font: "Source Sans Pro", sans-serif; }
+  html, body { margin: 0; padding: 0; background: transparent; color: var(--fg); font-family: var(--font);
+               font-size: 13px; user-select: none; -webkit-user-select: none; }
+  table { border-collapse: collapse; }
+  th, td { border: 1px solid var(--line); text-align: center; }
+  th { font-weight: 600; padding: 2px 6px; cursor: pointer; white-space: nowrap; }
+  th.corner { cursor: default; }
+  td.cell { width: 46px; height: 22px; cursor: crosshair; }
+  td.on { background: var(--on); }
+  td.preview-on { background: color-mix(in srgb, var(--on) 50%, transparent); outline: 1px dashed var(--on); }
+  td.preview-off { background: var(--preview-off); }
+  .hint { margin: 6px 0 0 0; opacity: .7; font-size: 12px; }
+</style>
+</head>
+<body>
+<table id="grid"></table>
+<p class="hint">Click a cell, hold and drag: the whole rectangle takes the opposite state of the first cell.
+Click a day or an hour header to toggle the whole column or row.</p>
+<script>
+  // Protocole des composants Streamlit (messages postMessage), sans bibliothèque à installer.
+  const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  let grid = null, version = null, start = null, end = null, mode = null;
+
+  function send(type, data) {
+    window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
+  }
+  function setHeight() { send("streamlit:setFrameHeight", {height: document.body.scrollHeight + 4}); }
+  function emit() { send("streamlit:setComponentValue", {value: {grid: grid, version: version}, dataType: "json"}); }
+
+  function inRect(r, c) {
+    if (!start || !end) return false;
+    return r >= Math.min(start[0], end[0]) && r <= Math.max(start[0], end[0]) &&
+           c >= Math.min(start[1], end[1]) && c <= Math.max(start[1], end[1]);
+  }
+  function paint() {
+    document.querySelectorAll("td.cell").forEach(td => {
+      const r = +td.dataset.r, c = +td.dataset.c;
+      td.className = "cell";
+      if (inRect(r, c)) td.classList.add(mode ? "preview-on" : "preview-off");
+      else if (grid[r][c]) td.classList.add("on");
+    });
+  }
+  function build() {
+    const t = document.getElementById("grid");
+    let html = '<tr><th class="corner"></th>' + DAYS.map((d, c) => `<th data-col="${c}">${d}</th>`).join("") + "</tr>";
+    for (let r = 0; r < 24; r++) {
+      const h = String(r).padStart(2, "0") + "h-" + String(r + 1).padStart(2, "0") + "h";
+      html += `<tr><th data-row="${r}">${h}</th>` +
+              DAYS.map((_, c) => `<td class="cell" data-r="${r}" data-c="${c}"></td>`).join("") + "</tr>";
+    }
+    t.innerHTML = html;
+    t.querySelectorAll("td.cell").forEach(td => {
+      td.addEventListener("mousedown", e => {
+        e.preventDefault();
+        start = end = [+td.dataset.r, +td.dataset.c];
+        mode = !grid[start[0]][start[1]];
+        paint();
+      });
+      td.addEventListener("mouseenter", () => { if (start) { end = [+td.dataset.r, +td.dataset.c]; paint(); } });
+    });
+    t.querySelectorAll("th[data-col]").forEach(th => th.addEventListener("click", () => {
+      const c = +th.dataset.col, v = !grid[0][c];
+      for (let r = 0; r < 24; r++) grid[r][c] = v;
+      paint(); emit();
+    }));
+    t.querySelectorAll("th[data-row]").forEach(th => th.addEventListener("click", () => {
+      const r = +th.dataset.row, v = !grid[r][0];
+      for (let c = 0; c < 7; c++) grid[r][c] = v;
+      paint(); emit();
+    }));
+  }
+  function finish() {
+    if (!start) return;
+    for (let r = Math.min(start[0], end[0]); r <= Math.max(start[0], end[0]); r++)
+      for (let c = Math.min(start[1], end[1]); c <= Math.max(start[1], end[1]); c++) grid[r][c] = mode;
+    start = end = null;
+    paint(); emit();
+  }
+  window.addEventListener("mouseup", finish);
+  document.documentElement.addEventListener("mouseleave", finish);   // bouton relâché hors de la grille
+  window.addEventListener("message", e => {
+    const d = e.data;
+    if (!d || d.type !== "streamlit:render") return;
+    const a = d.args || {};
+    if (d.theme) {
+      const s = document.documentElement.style;
+      if (d.theme.textColor) s.setProperty("--fg", d.theme.textColor);
+      if (d.theme.primaryColor) s.setProperty("--on", d.theme.primaryColor);
+      if (d.theme.font) s.setProperty("--font", d.theme.font);
+    }
+    // Nouvelle grille envoyée par Python (bouton de raccourci, nouvelle session) : elle remplace l'état local
+    if (grid === null || a.version !== version) {
+      grid = a.grid.map(row => row.map(Boolean));
+      version = a.version;
+      if (!document.querySelector("td.cell")) build();
+      paint();
+    }
+    setHeight();
+  });
+  send("streamlit:componentReady", {apiVersion: 1});
+</script>
+</body>
+</html>

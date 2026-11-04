@@ -117,6 +117,9 @@ from pricer.risk import history_bounds               # noqa: E402
 from pricer.settings import Settings                 # noqa: E402
 
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+if str(Path(__file__).parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent))
+from week_grid import week_grid                      # noqa: E402  (grille à cocher en glissant)
 
 
 # ------------------------------------------------------------------ données (mises en cache)
@@ -223,8 +226,8 @@ if kind == "block":
     block_profile = st.radio("Block", ["Base", "Peak", "Offpeak"], horizontal=True)
 
 if kind == "grid":
-    st.markdown("**Weekly delivery profile** — tick the delivered hours; the week applies to the whole period "
-                "(a public holiday follows its weekday).")
+    st.markdown("**Weekly delivery profile** — click and drag to tick (or untick) a rectangle of hours; the week "
+                "applies to the whole period (a public holiday follows its weekday).")
     if "grid" not in st.session_state:
         st.session_state.grid = empty_grid().set_axis(DAYS, axis=1)
         st.session_state.grid_version = 0
@@ -243,12 +246,10 @@ if kind == "grid":
     b[2].button("Weekdays 0h-24h", on_click=fill, args=(lambda h, d, v: d < 5,))
     b[3].button("Peak Mon-Fri 8h-20h", on_click=fill, args=(lambda h, d, v: d < 5 and 8 <= h < 20,))
     b[4].button("Invert", on_click=fill, args=(lambda h, d, v: not v,))
-    shown = st.session_state.grid.copy()
-    shown.index = [f"{h:02d}h-{h + 1:02d}h" for h in range(24)]
-    edited = st.data_editor(shown, key=f"grid_editor_{st.session_state.grid_version}", height=36 * 25,
-                            column_config={d: st.column_config.CheckboxColumn(d, width="small") for d in DAYS})
-    grid = edited.reset_index(drop=True).astype(bool)
-    st.session_state.grid = grid.set_axis(DAYS, axis=1)
+    changed = week_grid(st.session_state.grid.astype(bool).to_numpy().tolist(), st.session_state.grid_version)
+    if changed is not None:                          # cases cochées ou décochées à la souris
+        st.session_state.grid = pd.DataFrame(changed, columns=DAYS)
+    grid = st.session_state.grid.reset_index(drop=True).astype(bool)
     st.caption(f"{int(grid.to_numpy().sum())} hours ticked per week")
 
 if kind == "csv":
