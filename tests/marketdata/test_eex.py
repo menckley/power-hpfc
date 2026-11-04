@@ -4,8 +4,14 @@ import pandas as pd
 import pytest
 
 from marketdata import DataNotFoundError
-from marketdata.eex import (fetch_settlement, latest_session, listed_candidates, make_contract,
-                            parse_history, sunday_slot)
+from marketdata.eex import (
+    fetch_settlement,
+    latest_session,
+    listed_candidates,
+    make_contract,
+    parse_history,
+    sunday_slot,
+)
 
 HEADER = ["shortCode", "maturityDate", "tradeDate", "totVolTrdd", "grossOpenInt",
           "grossOpenIntSz", "netOpenInt", "netOpenIntSz", "settlPx"]

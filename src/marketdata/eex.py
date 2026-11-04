@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
-from typing import Callable
 
 import pandas as pd
 import requests

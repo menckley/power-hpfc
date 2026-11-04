@@ -11,7 +11,36 @@ chaque jour à partir des settlements EEX et de l'historique day-ahead ENTSO-E.
 - `src/hpfc/` : librairie HPFC (calendrier, contraintes, forme, calibration, archive, pipeline).
 - `config/FR.yaml` : paramètres du marché et du modèle.
 - `tests/` : tests automatiques (`python -m pytest`).
-- `data/` : archive (settlements, spot, courbes, précision), alimentée par le run quotidien.
+- `app/` : application web Streamlit (pricer, historique des pricings, courbes, précision).
+- `data/` : archive (settlements, options, spot, €STR, courbes, précision), alimentée par le run quotidien. Elle
+  **n'est pas dans ce dépôt** : c'est un clone du dépôt privé `menckley/power-hpfc-data` (voir « Données »).
+
+## Architecture
+
+| Dépôt | Visibilité | Contenu |
+|---|---|---|
+| `power-hpfc` | public | code : données de marché, HPFC, précision, application web |
+| `power-hpfc-data` | **privé** | archive `data/` écrite chaque jour par le workflow de ce dépôt |
+| `pricer` | public | pricing des deals, lit l'archive par le paquet `hpfc` ; journal des pricings |
+| `settlements-eex` (+ `settlements-eex-data`, privé) | public | e-mail quotidien des settlements EEX, autonome |
+
+Les données EEX restent privées : leur rediffusion est soumise aux conditions de licence d'EEX. Le détail des
+dépendances est dans la [notice](docs/NOTICE.md#1-les-trois-dépôts-et-leurs-dépendances).
+
+## Données
+
+- **Workflow** (`.github/workflows/daily.yml`) : récupère le code, puis le dépôt de données dans `data/` avec le
+  secret `DATA_REPO_TOKEN` (jeton GitHub *fine-grained*, **Contents : Read and write** sur
+  `menckley/power-hpfc-data`), construit et archive, puis pousse le commit du jour dans le dépôt de données.
+- **En local** : cloner le dépôt de données dans `data/` (ignoré par git dans ce dépôt) :
+
+  ```bash
+  git clone https://github.com/menckley/power-hpfc-data.git data
+  ```
+
+- **Application en ligne** : `app/data_sync.py` télécharge l'archive du dernier commit du dépôt de données (secret
+  Streamlit `DATA_REPO_TOKEN`, Contents en lecture suffit) et la retélécharge à chaque nouveau commit, vérifié toutes
+  les 5 minutes.
 
 ## Commandes
 
@@ -119,19 +148,25 @@ streamlit run app/streamlit_app.py      # en local, s'ouvre dans le navigateur
 
 En ligne : Streamlit Community Cloud, dépôt `power-hpfc`, branche `main`,
 fichier principal `app/streamlit_app.py` (dépendances : `app/requirements.txt`).
-L'application lit directement le dossier `data/` du dépôt : chaque courbe poussée par
-le workflow quotidien y apparaît automatiquement.
+L'application lit `data/`, téléchargé depuis le dépôt privé de données (`app/data_sync.py`) : chaque courbe
+poussée par le workflow quotidien y apparaît en moins de 5 minutes.
 
 | Page | Contenu |
 |---|---|
-| **Pricer** (accueil) | Pricing d'un deal avec le paquet du dépôt privé `pricer` (téléchargé avec le secret `PRICER_TOKEN`, rechargé moins de 5 minutes après un push qui modifie `src/` ou `config/` de `pricer`) ; archivage automatique dans le journal de `pricer` |
+| **Pricer** (accueil) | Pricing d'un deal avec le paquet du dépôt `pricer` (téléchargé avec le secret `PRICER_TOKEN`, rechargé moins de 5 minutes après un push qui modifie `src/` ou `config/` de `pricer`) ; archivage automatique dans le journal de `pricer` |
 | **Pricing history** | Tous les pricings du journal, détail de chacun, export de tous les pricings en CSV ou Excel (journal, construction du prix, scénarios, couverture, avertissements) |
 | **HPFC curves** | Extraction des courbes archivées |
 | **HPFC accuracy** | Précision des courbes face au day-ahead réalisé |
 
-Secret de l'application (Streamlit Cloud → Settings → Secrets, jamais dans un dépôt) : `PRICER_TOKEN`, jeton GitHub
-*fine-grained* limité à `menckley/pricer`, **Contents : Read and write**. En local : `.streamlit/secrets.toml`
-(ignoré par git) ou paquet `pricer` installé en mode éditable.
+Secrets de l'application (Streamlit Cloud → Settings → Secrets, jamais dans un dépôt) :
+
+- `PRICER_TOKEN` : jeton GitHub *fine-grained* sur `menckley/pricer`, **Contents : Read and write** (téléchargement
+  du code du pricer et écriture du journal des pricings) ;
+- `DATA_REPO_TOKEN` : jeton GitHub *fine-grained* sur `menckley/power-hpfc-data`, **Contents : Read** (un seul jeton
+  couvrant les deux dépôts convient aussi, mis dans `PRICER_TOKEN`).
+
+En local : `.streamlit/secrets.toml` (ignoré par git), ou paquet `pricer` installé en mode éditable et `data/`
+cloné.
 
 ## Règle de données
 
@@ -170,8 +205,12 @@ La feuille de route du pricer (options, TBx, flexibilité, produits structurés�
 
 ## Reprise après une pause
 
-- `git pull --rebase` avant toute modification : le workflow pousse un commit chaque jour.
+- `git pull --rebase` dans `data/` : le workflow pousse un commit chaque jour dans le dépôt de données.
 - Onglet **Actions** du dépôt : vérifier que les runs quotidiens sont verts (courbe et précision).
-- Vérifier que les secrets n'ont pas expiré : `ENTSOE_API_KEY` (secret GitHub du dépôt) et `PRICER_TOKEN`
-  (secret Streamlit).
+- Vérifier que les secrets n'ont pas expiré : `ENTSOE_API_KEY` et `DATA_REPO_TOKEN` (secrets GitHub du dépôt),
+  `PRICER_TOKEN` et `DATA_REPO_TOKEN` (secrets Streamlit).
 - Page **HPFC accuracy** : l'historique s'est allongé pendant la pause, regarder les horizons D+91 et au-delà.
+
+## Licence
+
+Code sous licence [MIT](LICENSE). Les données de marché ne sont pas incluses (dépôt privé).

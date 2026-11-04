@@ -10,14 +10,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))          # le paquet n'a pas besoin d'être installé
 
-import pandas as pd                             # noqa: E402
-import plotly.graph_objects as go               # noqa: E402
-import streamlit as st                          # noqa: E402
+import pandas as pd  # noqa: E402
+import plotly.graph_objects as go  # noqa: E402
+import streamlit as st  # noqa: E402
 
-from hpfc import archive                        # noqa: E402
-from hpfc.config import load_config             # noqa: E402
-from hpfc.extract import extract                # noqa: E402
-from marketdata import DataNotFoundError        # noqa: E402
+from hpfc import archive  # noqa: E402
+from hpfc.config import load_config  # noqa: E402
+from hpfc.extract import extract  # noqa: E402
+from marketdata import DataNotFoundError  # noqa: E402
 
 MARKET = "FR"
 DATA = REPO / "data"

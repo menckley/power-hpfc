@@ -94,7 +94,8 @@ def main(argv=None) -> int:
             m = res.metadata
             print(f"Courbe {args.market} du {res.pricing_date} créée : {res.path}")
             print(f"  {m['products']['quoted']} produits cotés, {m['constraints']['retained']} contraintes, "
-                  f"{m['calibration']['iterations']} itérations, écart max {m['checks']['max_gap_products']:.4f} {m['unit']}")
+                  f"{m['calibration']['iterations']} itérations, "
+                  f"écart max {m['checks']['max_gap_products']:.4f} {m['unit']}")
         return 0
 
     if args.cmd == "backfill":

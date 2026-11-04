@@ -30,46 +30,62 @@ flowchart LR
     ENTSOE[(ENTSO-E<br/>day-ahead FR)]
     ECB[(API BCE<br/>€STR)]
 
-    subgraph HPFC[power-hpfc]
+    subgraph HPFC[power-hpfc · public]
         RUN[run quotidien<br/>GitHub Actions]
-        DATA[(data/<br/>settlements, options, spot,<br/>€STR, courbes, précision)]
         APP[application Streamlit<br/>app/]
     end
 
-    subgraph PRICER[pricer]
+    subgraph HDATA[power-hpfc-data · privé]
+        DATA[(settlements, options, spot,<br/>€STR, courbes, précision)]
+    end
+
+    subgraph PRICER[pricer · public]
         LIB[paquet pricer<br/>src/pricer]
         CFG[config/<br/>pricer.yaml, marge.yaml]
         JOURNAL[(pricings/<br/>journal des pricings)]
     end
 
-    subgraph SETTL[settlements-eex]
+    subgraph SETTL[settlements-eex · public]
         REPORT[rapport_settlements.py<br/>GitHub Actions]
-        HIST[(data/settlements.csv)]
+    end
+
+    subgraph SDATA[settlements-eex-data · privé]
+        HIST[(settlements.csv)]
     end
 
     EEX --> RUN
     ENTSOE --> RUN
     ECB --> RUN
-    RUN --> DATA
-    DATA --> LIB
+    RUN -- "commit quotidien<br/>(DATA_REPO_TOKEN)" --> DATA
+    DATA -- "clone local dans<br/>power-hpfc/data" --> LIB
     ECB --> LIB
     LIB -- "téléchargé par l'app<br/>(PRICER_TOKEN)" --> APP
     CFG --> LIB
-    APP -- "lit data/ du même dépôt" --> DATA
+    DATA -- "téléchargé par l'app<br/>(DATA_REPO_TOKEN)" --> APP
     APP -- "écrit chaque pricing<br/>(API GitHub)" --> JOURNAL
     APP -- "page Pricing history" --> JOURNAL
     EEX --> REPORT
-    REPORT --> HIST
+    REPORT -- "commit quotidien" --> HIST
 ```
 
-| Dépôt | Rôle | Dépend de | Utilisé par |
-|---|---|---|---|
-| **power-hpfc** | Données de marché archivées chaque jour, HPFC France, précision de la HPFC, application web | APIs publiques EEX, ENTSO-E (clé), BCE | `pricer` (bibliothèque `hpfc` + archive `data/`) ; l'application web |
-| **pricer** | Pricing des deals : prix fixe couvert, indexé spot, options EEX ; journal des pricings | `power-hpfc` : paquet `hpfc` (lecture de l'archive) et dossier `data/` ; API BCE | L'application web de power-hpfc, qui télécharge son code |
-| **settlements-eex** | E-mail quotidien des settlements EEX (power, gaz, garanties d'origine) et historique CSV | API publique EEX | Personne : autonome |
+| Dépôt | Visibilité | Rôle | Dépend de | Utilisé par |
+|---|---|---|---|---|
+| **power-hpfc** | public | Code : collecte des données de marché, HPFC France, précision de la HPFC, application web | APIs publiques EEX, ENTSO-E (clé), BCE ; `power-hpfc-data` (archive) | `pricer` (paquet `hpfc`) ; l'application web |
+| **power-hpfc-data** | **privé** | Archive `data/` : settlements et options EEX, spot ENTSO-E, €STR, courbes, précision | écrit par le workflow de power-hpfc | `power-hpfc` (workflow, application), `pricer` |
+| **pricer** | public | Pricing des deals : prix fixe couvert, indexé spot, options EEX ; journal des pricings | `power-hpfc` : paquet `hpfc` et archive `data/` (clone de `power-hpfc-data`) ; API BCE | L'application web de power-hpfc, qui télécharge son code |
+| **settlements-eex** | public | E-mail quotidien des settlements EEX (power, gaz, garanties d'origine) | API publique EEX ; `settlements-eex-data` | Personne : autonome |
+| **settlements-eex-data** | **privé** | Historique `settlements.csv` | écrit par le workflow de settlements-eex | `settlements-eex` |
+
+**Pourquoi des dépôts de données privés.** La rediffusion des données EEX est soumise aux conditions de licence
+d'EEX. Le code est public, les données restent privées. Chaque dépôt de code voit son dépôt de données comme son
+dossier `data/` : en local c'est un clone placé à cet endroit (et ignoré par git), dans le workflow c'est un second
+`actions/checkout`, dans l'application en ligne une archive téléchargée. Les chemins du code n'ont donc pas changé.
 
 Sens des dépendances, en détail :
 
+- **power-hpfc → power-hpfc-data.** Le workflow récupère le dépôt de données dans `data/` (secret
+  `DATA_REPO_TOKEN`, jeton GitHub *fine-grained* avec *Contents : Read and write* sur ce dépôt), y écrit l'archive
+  du jour et y pousse le commit. L'application en ligne le télécharge (§9).
 - **pricer → power-hpfc.** `pricer.market.Market.load(chemin du clone power-hpfc)` importe le paquet `hpfc`
   (`hpfc.archive`, `hpfc.config`) installé depuis ce clone (`pip install -e`). Il vérifie que le paquet importé
   vient bien du même dossier, puis lit dans `data/` :
@@ -81,8 +97,8 @@ Sens des dépendances, en détail :
   - le journal €STR.
 
   La définition du peak et la tolérance de reproduction des settlements viennent aussi de `config/FR.yaml`.
-  En local, `Market.load(..., sync=True)` fait d'abord un `git pull --ff-only` de power-hpfc. Il refuse si
-  `data/` a été modifié localement.
+  En local, `Market.load(..., sync=True)` fait d'abord un `git pull --ff-only` de power-hpfc **et** du clone de
+  données `data/`. Il refuse si `data/` a été modifié localement.
 - **Application (power-hpfc/app) → pricer.** En ligne, la page Pricer télécharge l'archive du dernier commit du
   dépôt `menckley/pricer` avec le secret Streamlit `PRICER_TOKEN`. Le code est rechargé quand un commit
   touche `src/` ou `config/` (vérification toutes les 5 minutes). En local, elle utilise le paquet `pricer`
@@ -97,18 +113,19 @@ Sens des dépendances, en détail :
 
 ## 2. Le run quotidien (GitHub Actions)
 
-Fichier `.github/workflows/daily.yml`. Déclenchement chaque jour à 05:00 UTC, soit 07:00 à Paris en hiver et
-08:00 en été. Il peut aussi être lancé à la main (*Run workflow*). `concurrency` empêche deux runs simultanés.
+Fichier `.github/workflows/daily.yml`. Déclenchement chaque jour à 05:00 UTC, soit 06:00 à Paris en hiver et
+07:00 en été. Il peut aussi être lancé à la main (*Run workflow*). `concurrency` empêche deux runs simultanés.
 Durée maximale : 90 minutes.
 
 | Étape | Commande | Si elle échoue |
 |---|---|---|
+| 0. Code et données | `actions/checkout` du code, puis du dépôt privé `menckley/power-hpfc-data` dans `data/` (secret `DATA_REPO_TOKEN`) | le run s'arrête |
 | 1. Tests | `python -m pytest -q` | le run s'arrête : aucune courbe n'est produite avec du code qui ne passe pas ses tests |
 | 2. Courbe | `python -m hpfc.cli run --market FR` (secret `ENTSOE_API_KEY`) | le run s'arrête |
 | 3. €STR | `python -m hpfc.cli estr` | `continue-on-error` : rattrapé au run suivant, sans trou |
 | 4. Options EEX | `python -m hpfc.cli options --market FR` | `continue-on-error` |
 | 5. Précision | `python -m hpfc.cli accuracy --market FR` | `continue-on-error` |
-| 6. Archive | `git add data` puis commit « Archive HPFC FR AAAA-MM-JJ » et push, seulement s'il y a du nouveau | — |
+| 6. Archive | dans `data/` : `git add -A` puis commit « Archive HPFC FR AAAA-MM-JJ » et push **dans le dépôt de données**, seulement s'il y a du nouveau | — |
 
 L'ordre compte. Les options ne sont archivées que pour des séances déjà couvertes par les futures (étape 2,
 voir §3.3). La précision relit les courbes et le spot que l'étape 2 vient d'archiver.
@@ -375,6 +392,9 @@ que ses métadonnées existent) :
 
 ## 7. Archive `data/`
 
+`data/` est le dépôt privé `menckley/power-hpfc-data`, placé dans le dossier `data/` de power-hpfc (clone local,
+second checkout du workflow ou archive téléchargée par l'application) et ignoré par git dans le dépôt de code.
+
 ```
 data/
 ├── eex/settlements/market=FR/session=AAAA-MM-JJ/settlements.parquet   tous les contrats interrogés de la séance
@@ -443,6 +463,13 @@ horizon par horizon, quand l'archive sera assez longue : au moins 12 mois livré
 Point d'entrée : `app/streamlit_app.py`. En local : `streamlit run app/streamlit_app.py`. En ligne : Streamlit
 Community Cloud, avec les dépendances de `app/requirements.txt`. Thème sombre dans `.streamlit/config.toml`.
 
+**Données** (`app/data_sync.py`, appelé avant toute page) :
+- en local, `data/` est un clone du dépôt de données : il est utilisé tel quel ;
+- en ligne, l'application télécharge l'archive du dernier commit de `menckley/power-hpfc-data` avec le secret
+  `DATA_REPO_TOKEN` (à défaut `PRICER_TOKEN`, si ce jeton a aussi accès au dépôt de données), l'extrait dans un
+  dossier temporaire puis remplace `data/` d'un coup. Le dernier commit est revérifié toutes les 5 minutes ; un
+  nouveau commit déclenche un nouveau téléchargement. Le commit extrait est noté dans `data/.source_commit`.
+
 **Mise à jour du code sans redémarrage :**
 - Quand un fichier de `src/` change (un push tiré par Streamlit Cloud), les modules `hpfc` et `marketdata`
   déjà importés sont retirés, puis réimportés, et les caches sont vidés.
@@ -473,8 +500,12 @@ editor » affiche la même grille en tableau éditable.
 - **Market volatility** : écart-type des prix horaires réalisés du jour. Il est comparé à la médiane du même
   indice sur les 30 jours précédents (`VOL_WINDOW`), à condition d'en avoir au moins 20.
 
-**Secrets** (Streamlit Cloud, jamais dans un dépôt) : `PRICER_TOKEN`, un jeton GitHub à grain fin avec
-*Contents : Read and write* sur le seul dépôt pricer.
+**Secrets** (Streamlit Cloud, jamais dans un dépôt) :
+- `PRICER_TOKEN` : jeton GitHub à grain fin avec *Contents : Read and write* sur le dépôt pricer (code et journal) ;
+- `DATA_REPO_TOKEN` : jeton GitHub à grain fin avec *Contents : Read* sur `menckley/power-hpfc-data`.
+
+**Secrets du workflow** (GitHub → Settings → Secrets and variables → Actions) : `ENTSOE_API_KEY` et
+`DATA_REPO_TOKEN` (*Contents : Read and write* sur `menckley/power-hpfc-data`).
 
 ---
 
@@ -537,8 +568,7 @@ Contrôles à la lecture (`HPFCConfig.validate`) :
 - **APIs non documentées.** Les requêtes `table-data` d'eex.com peuvent changer sans préavis. Leur historique
   ne dépasse pas environ 45 jours : une séance non archivée à temps est perdue.
 - **Données EEX et ENTSO-E.** Les données ENTSO-E sont publiées sous licence ouverte. La rediffusion des données
-  EEX est soumise aux conditions de licence d'EEX : à vérifier avant de rendre public un dépôt qui contient
-  `data/eex/`.
+  EEX est soumise aux conditions de licence d'EEX : c'est pourquoi toute l'archive est dans un dépôt privé.
 - **Limites du modèle.**
   - La forme est historique : moyenne par cellule, sans dépendance aux fondamentaux (vent, solaire,
     consommation) ;

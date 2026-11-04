@@ -12,14 +12,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
-import numpy as np                              # noqa: E402
-import pandas as pd                             # noqa: E402
-import plotly.graph_objects as go               # noqa: E402
-import streamlit as st                          # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import plotly.graph_objects as go  # noqa: E402
+import streamlit as st  # noqa: E402
 
-from hpfc import accuracy, archive              # noqa: E402
-from hpfc.config import load_config             # noqa: E402
-from marketdata import DataNotFoundError        # noqa: E402
+from hpfc import accuracy, archive  # noqa: E402
+from hpfc.config import load_config  # noqa: E402
+from marketdata import DataNotFoundError  # noqa: E402
 
 MARKET = "FR"
 DATA = REPO / "data"
@@ -115,7 +115,8 @@ else:
     fig = go.Figure()
     fig.add_scatter(x=both.index, y=both["real"], name="Realized day-ahead (market)", mode="lines+markers",
                     line=dict(color=REALIZED, width=3))
-    fig.add_scatter(x=both.index, y=both["fc"], name=f"Forecast: HPFC of {curve_date:%d/%m} (D-{(day - curve_date).days})",
+    fig.add_scatter(x=both.index, y=both["fc"],
+                    name=f"Forecast: HPFC of {curve_date:%d/%m} (D-{(day - curve_date).days})",
                     mode="lines+markers", line=dict(color=FORECAST, width=3, dash="dash"))
     fig.update_layout(height=420, yaxis_title="€/MWh", xaxis_title="Hour (local time)", hovermode="x unified",
                       margin=dict(t=30, b=20), legend=dict(orientation="h", y=1.1),

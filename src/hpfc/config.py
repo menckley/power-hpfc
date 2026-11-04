@@ -45,7 +45,7 @@ class HPFCConfig:
     source_hash: str = ""          # empreinte du fichier YAML (traçabilité)
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "HPFCConfig":
+    def from_yaml(cls, path: str | Path) -> HPFCConfig:
         path = Path(path)
         text = path.read_text(encoding="utf-8")
         raw = yaml.safe_load(text)

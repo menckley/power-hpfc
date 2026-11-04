@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import io
 import time
+from collections.abc import Callable
 from datetime import date
-from typing import Callable
 
 import pandas as pd
 import requests

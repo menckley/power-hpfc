@@ -12,7 +12,8 @@ entièrement archivés des deux côtés sont comptés. Le calcul est refait en e
 dépend que de l'archive) : il est donc reproductible et toujours cohérent avec les courbes archivées.
 
 Lecture : sur les premiers jours (produits courts EEX Day / Weekend / Week, `products.short_days` de la
-configuration), le niveau de la HPFC est ancré sur leurs settlements ; l'erreur de niveau y mesure surtout l'écart entre le marché à terme et le day-ahead. Au-delà,
+configuration), le niveau de la HPFC est ancré sur leurs settlements ; l'erreur de niveau y mesure surtout
+l'écart entre le marché à terme et le day-ahead. Au-delà,
 elle mesure le marché à terme (mois, trimestre, année) plus la saisonnalité de la HPFC. La forme horaire
 (hourly_mae, profile_corr) est le vrai apport de la HPFC, à tous les horizons.
 """

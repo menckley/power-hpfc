@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -158,7 +158,7 @@ m[2].metric("Last pricing", pd.to_datetime(journal["priced_at_utc"].iloc[0]).tz_
             .strftime("%d/%m/%Y %H:%M"))
 m[3].metric("Deals labelled", f"{journal['label'].nunique()}")
 
-stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+stamp = datetime.now(UTC).strftime("%Y%m%d")
 d1, d2, _ = st.columns([1, 1, 3])
 d1.download_button("Export all (CSV)", journal.to_csv(index=False).encode("utf-8"),
                    file_name=f"pricings_{stamp}.csv", mime="text/csv", use_container_width=True,

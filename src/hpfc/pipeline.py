@@ -5,7 +5,7 @@ import logging
 import os
 import subprocess
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -17,8 +17,7 @@ from hpfc.config import HPFCConfig, load_config
 from hpfc.constraints import check_coverage, independent_constraints
 from hpfc.shape import fit_shape
 from hpfc.validation import check_no_arbitrage, monthly_summary
-from marketdata import DataNotFoundError
-from marketdata import eex
+from marketdata import DataNotFoundError, eex
 from marketdata.entsoe import load_day_ahead_hourly, make_client
 
 METHOD = "E"
@@ -119,14 +118,14 @@ def run(market: str, pricing_date: date | None = None, *, today: date | None = N
     # 6. Archive
     out = pd.DataFrame({"local": cal["local"], "price": curve, "is_peak": cal["is_peak"]}, index=cal.index)
     summary = monthly_summary(curve, cal).round(4)
+    not_quoted = all_settle[all_settle["settlement"].isna()]
     metadata = {
         "market": cfg.market, "pricing_date": session.isoformat(), "method": METHOD,
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "code_version": code_version(), "config_hash": cfg.source_hash, "unit": cfg.unit,
         "curve": {"start": start.isoformat(), "end": end.isoformat(), "steps": len(out)},
         "products": {"queried": len(all_settle), "quoted": len(settle),
-                     "not_quoted": sorted(all_settle.loc[all_settle["settlement"].isna(), "name"]
-                                          .astype(str) + " " + all_settle.loc[all_settle["settlement"].isna(), "profile"]),
+                     "not_quoted": sorted(not_quoted["name"].astype(str) + " " + not_quoted["profile"]),
                      "coverage_days": coverage},
         "constraints": {"retained": len(cs.b_eq), "dropped": len(cs.dropped),
                         "degrees_of_freedom": cs.degrees_of_freedom,

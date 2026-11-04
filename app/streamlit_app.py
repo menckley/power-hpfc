@@ -1,7 +1,7 @@
 """Application web : pricer (page d'accueil), historique des pricings, courbes HPFC et précision de la HPFC.
 
-En local :   streamlit run app/streamlit_app.py
-En ligne :   Streamlit Community Cloud, fichier principal app/streamlit_app.py
+En local :   streamlit run app/streamlit_app.py   (data/ = clone du dépôt privé de données)
+En ligne :   Streamlit Community Cloud, fichier principal app/streamlit_app.py (data/ téléchargé, voir data_sync.py)
 """
 from __future__ import annotations
 
@@ -13,9 +13,19 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO / "src") not in sys.path:
     sys.path.insert(0, str(REPO / "src"))      # paquets hpfc et marketdata de ce dépôt
 
-import streamlit as st                          # noqa: E402
+import streamlit as st  # noqa: E402
 
 st.set_page_config(page_title="Power Pricing Desk", layout="wide")
+
+if str(Path(__file__).parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent))
+from data_sync import ensure_data  # noqa: E402
+
+try:
+    data_source = ensure_data(REPO)             # archive de données à jour avant toute page
+except Exception as exc:                        # message sans le jeton
+    st.error(f"Market data unavailable: {exc}")
+    st.stop()
 
 
 def code_signature() -> tuple:

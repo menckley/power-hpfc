@@ -20,7 +20,8 @@ def test_ecriture_lecture(tmp_path):
 
 
 def test_lecture_sans_partition_du_chemin(tmp_path):
-    """Une colonne qui porte le nom d'un dossier « clé=valeur » du chemin (cas des settlements) se relit telle quelle."""
+    """Une colonne qui porte le nom d'un dossier « clé=valeur » du chemin (cas des settlements) se relit
+    telle quelle."""
     pytest.importorskip("pyarrow")
     from datetime import date
     df = pd.DataFrame({"name": ["Cal-27"], "settlement": [80.5], "session": [date(2026, 10, 23)]})

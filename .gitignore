@@ -21,6 +21,9 @@ notebooks/data/
 # macOS
 .DS_Store
 
+# Archive de données : clone du dépôt privé menckley/power-hpfc-data (voir README, « Données »)
+data/
+
 # Écritures interrompues
 *.tmp
 

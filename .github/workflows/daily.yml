@@ -2,11 +2,11 @@ name: HPFC quotidienne
 
 on:
   schedule:
-    - cron: "0 5 * * *"        # chaque jour à 06:00 UTC (08:00 à Paris en été, 07:00 en hiver)
+    - cron: "0 5 * * *"        # chaque jour à 05:00 UTC (07:00 à Paris en été, 06:00 en hiver)
   workflow_dispatch:            # bouton « Run workflow » pour un lancement manuel
 
 permissions:
-  contents: write               # nécessaire pour pousser l'archive dans le dépôt
+  contents: read                # le code n'est que lu ; l'archive est poussée dans le dépôt de données (jeton dédié)
 
 concurrency:
   group: hpfc-daily             # jamais deux runs en même temps
@@ -18,8 +18,15 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Récupérer le dépôt (code + archive)
+      - name: Récupérer le code
         uses: actions/checkout@v4
+
+      - name: Récupérer l'archive de données (dépôt privé menckley/power-hpfc-data, dans data/)
+        uses: actions/checkout@v4
+        with:
+          repository: menckley/power-hpfc-data
+          token: ${{ secrets.DATA_REPO_TOKEN }}   # jeton GitHub : Contents en lecture et écriture sur ce dépôt
+          path: data
 
       - name: Installer Python
         uses: actions/setup-python@v5
@@ -51,11 +58,12 @@ jobs:
         continue-on-error: true     # n'empêche jamais l'archivage de la courbe du jour
         run: python -m hpfc.cli accuracy --market FR
 
-      - name: Archiver dans le dépôt
+      - name: Archiver dans le dépôt de données
+        working-directory: data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data
+          git add -A
           if git diff --cached --quiet; then
             echo "Rien de nouveau à archiver"
           else

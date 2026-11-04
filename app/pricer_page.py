@@ -98,28 +98,39 @@ except Exception as exc:                             # message sans le jeton
     st.error(str(exc))
     st.stop()
 
-from pricer import archive                           # noqa: E402
+from pricer import archive  # noqa: E402
 from pricer.hedging import FULL_DA, STRATEGIES, hedge_summary  # noqa: E402
-from pricer.journal import archive_to_github         # noqa: E402
-from pricer.market import Market                     # noqa: E402
-from pricer.products import (WEEKDAYS, as_swap, block, custom, eex, empty_grid,  # noqa: E402
-                             quoted, read_profile_csv, weekly)
-from pricer.quote import quote                       # noqa: E402
+from pricer.journal import archive_to_github  # noqa: E402
+from pricer.market import Market  # noqa: E402
+from pricer.products import (  # noqa: E402
+    WEEKDAYS,
+    as_swap,
+    block,
+    custom,
+    eex,
+    empty_grid,
+    quoted,
+    read_profile_csv,
+    weekly,
+)
+from pricer.quote import quote  # noqa: E402
+
 try:                                                 # pricer ≥ 0.7 : options EEX
-    from pricer.option_quote import LABELS as OPTION_LABELS, option_series, quote_option  # noqa: E402
+    from pricer.option_quote import LABELS as OPTION_LABELS  # noqa: E402
+    from pricer.option_quote import option_series, quote_option
 except ImportError:
     quote_option = None
 try:                                                 # pricer ≥ 0.6 : contrats indexés spot
-    from pricer.indexation import quote_indexed      # noqa: E402
+    from pricer.indexation import quote_indexed  # noqa: E402
 except ImportError:
     quote_indexed = None
-from pricer.risk import history_bounds               # noqa: E402
-from pricer.settings import Settings                 # noqa: E402
+from pricer.risk import history_bounds  # noqa: E402
+from pricer.settings import Settings  # noqa: E402
 
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 if str(Path(__file__).parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).parent))
-from week_grid import week_grid                      # noqa: E402  (grille à cocher en glissant)
+from week_grid import week_grid  # noqa: E402  (grille à cocher en glissant)
 
 
 # ------------------------------------------------------------------ données (mises en cache)
@@ -235,7 +246,8 @@ def _grid_style(values: pd.DataFrame, colors: pd.DataFrame):
 def hedge_view(q) -> None:
     """Volumes de couverture de la stratégie choisie (ou d'une autre stratégie évaluée) et leur répartition sur une
     semaine type : heures livrées par source (EEX Base, EEX Peak, day-ahead) et volumes compensés en day-ahead."""
-    from pricer.hedging import coverage, full_da_hedge, hedge as build_hedge, typical_week
+    from pricer.hedging import coverage, full_da_hedge
+    from pricer.hedging import hedge as build_hedge
     chosen = q.context["strategy selected"]
     options = list(q.strategies.index) if len(q.strategies) else [chosen]
     c1, c2 = st.columns(2)
@@ -268,6 +280,22 @@ def hedge_view(q) -> None:
     v["% of delivered"] = 100 * v["MWh"] / v["MWh"].iloc[0] if v["MWh"].iloc[0] else float("nan")
     st.markdown(f"**Volumes** · {shown} · {period.lower() if month is None else period}")
     show(v, 1)
+
+    bought, sold = sel["day-ahead purchase MW"].sum(), sel["day-ahead resale MW"].sum()
+    delivered = abs(sel["delivered MW"].sum())
+    e = st.columns(4)
+    e[0].metric("Bought in day-ahead", f"{bought:,.0f} MWh")
+    e[1].metric("Sold in day-ahead", f"{sold:,.0f} MWh")
+    e[2].metric("Spot exposure", f"{100 * (bought + sold) / delivered:,.0f} % of volume" if delivered else "n/a",
+                help="MWh bought + MWh sold in day-ahead, relative to the delivered volume.")
+    e[3].metric("P&L if spot +10 €/MWh", f"{10 * (sold - bought):+,.0f} €",
+                help="Day-ahead level 10 €/MWh above the HPFC on every hour traded in day-ahead: "
+                     "+ on the MWh sold, − on the MWh bought.")
+    if bought + sold > 1e-6:
+        st.caption("Spot exposure can strongly impact a strategy: these hours are settled at the realised day-ahead "
+                   "price, not at the HPFC. A uniform level move only hits the net (sold − bought), but the price of "
+                   "these specific hours (shape, spikes, negative prices) hits both sides. Priced in the residual "
+                   "risk and the day-ahead level premium.")
 
     labels = hour_labels(h, cov, complete, offset, with_contract=False)
     grid_use = label_week(labels["use"], sel.index)
@@ -364,13 +392,16 @@ if is_option:
         st.stop()
     structure = c3.selectbox("Structure", list(OPTION_LABELS), format_func=OPTION_LABELS.get)
     o1, o2, o3 = deal.columns(3)
+    by_name = series_table.set_index("name")
     series_name = o1.selectbox("Underlying Base future", list(series_table["name"]),
-                               format_func=lambda n: f"{n} · F {series_table.set_index('name').loc[n, 'settlement']:.2f}"
-                                                     f" · expiry {series_table.set_index('name').loc[n, 'expiry']:%d/%m/%Y}")
+                               format_func=lambda n: f"{n} · F {by_name.loc[n, 'settlement']:.2f}"
+                                                     f" · expiry {by_name.loc[n, 'expiry']:%d/%m/%Y}")
     fwd = float(series_table.set_index("name").loc[series_name, "settlement"])
     if structure == "collar":
-        strike_low = o2.number_input("Floor strike (put), €/MWh", min_value=0.01, value=float(round(fwd - 10)), step=1.0)
-        strike_high = o3.number_input("Cap strike (call), €/MWh", min_value=0.01, value=float(round(fwd + 10)), step=1.0)
+        strike_low = o2.number_input("Floor strike (put), €/MWh", min_value=0.01, value=float(round(fwd - 10)),
+                                     step=1.0)
+        strike_high = o3.number_input("Cap strike (call), €/MWh", min_value=0.01, value=float(round(fwd + 10)),
+                                      step=1.0)
         strike_one = None
     else:
         strike_one = o2.number_input("Strike, €/MWh", min_value=0.01, value=float(round(fwd)), step=1.0)
@@ -652,7 +683,9 @@ if q is not None:
             show(q.lines, 2)
         if "Scenarios" in pane:
             with pane["Scenarios"]:
-                st.caption("Auto selects the cheapest scenario; tie: least day-ahead volume, then fewest contracts.")
+                st.caption("Auto selects the cheapest scenario; tie: least day-ahead volume, then fewest contracts. "
+                           "Spot exposure = MWh bought + sold in day-ahead: it can strongly impact a strategy. "
+                           "Odd-lot MWh: EEX volume below a full 1 MW lot, sourced OTC at a premium.")
                 show(q.strategies, 2)
         if "Risk" in pane:
             with pane["Risk"]:

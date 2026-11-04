@@ -91,7 +91,7 @@ def build_curve(model: ShapeModel, system: CurveSystem, cfg: HPFCConfig) -> tupl
 
     level = pd.Series(system.solve(md + intra)).groupby(ym).mean()   # point de départ : méthode C
     history = []
-    for it in range(1, cfg.max_iterations + 1):
+    for _ in range(cfg.max_iterations):
         if (level <= 0).any():
             raise ValueError(f"niveau mensuel non positif : {level[level <= 0].to_dict()}")
         k_h = level.reindex(ym).to_numpy() / lvl_train_h
