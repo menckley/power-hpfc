@@ -191,39 +191,23 @@ def _legend(labels: set) -> str:
     return f"<div style='margin:4px 0 2px 0'>{chips}</div>"
 
 
-def hour_labels(h, cov: pd.DataFrame, complete: str, offset: str, with_contract: bool) -> pd.DataFrame:
-    """Pour chaque heure : produit(s) utilisé(s) sur l'heure livrée (EEX Base, EEX Peak, day-ahead) et produit(s)
-    revendu(s) / racheté(s) en day-ahead hors livraison. Un produit couvre son heure en entier : on indique lequel,
-    les MW sont dans le tableau des volumes."""
+def hour_labels(h, cov: pd.DataFrame, complete: str, offset: str, with_contract: bool = False) -> pd.DataFrame:
+    """Produit utilisé à chaque heure, en lecture Peak / Offpeak : un Base + Peak EEX équivaut à un Peak (heures
+    peak) + un Offpeak (heures offpeak, porté par le contrat Base). Heure peak couverte : « Peak » ; heure offpeak
+    couverte : « Base » ; part non couverte : « Day-ahead ». À droite, le produit dont le volume est revendu
+    (ou racheté) en day-ahead à cette heure. Les MW sont dans le tableau des volumes."""
     eps = 5e-4
     idx = cov.index
-    base_name = pd.Series("", index=idx)
-    peak_name = pd.Series("", index=idx)
-    t = h.table
-    if with_contract and len(t) and "Base MW" in t.columns:
-        for r in t.itertuples():
-            m = (mkt.day[idx] >= r.start) & (mkt.day[idx] <= r.end)
-            if abs(t.loc[r.Index, "Base MW"]) > eps:
-                base_name[m.to_numpy()] = f" {r.Index}"
-            if abs(t.loc[r.Index, "Peak MW"]) > eps:
-                peak_name[(m & mkt.is_peak[idx]).to_numpy()] = f" {r.Index}"
-    elif with_contract and len(t):
-        name = str(t.index[0]).split(" ", 1)[-1]
-        base_name[:] = f" {name}"
-        peak_name[:] = f" {name}"
-    has_b = cov["EEX Base MW"].abs() > eps
-    has_p = cov["EEX Peak MW"].abs() > eps
-    delivered = cov["delivered MW"].abs() > eps
-
-    def join(*parts):
-        return [" + ".join(x for x in row if x) for row in zip(*parts)]
-
-    b = ["Base" + n if f else "" for f, n in zip(has_b, base_name)]
-    pk = ["Peak" + n if f else "" for f, n in zip(has_p, peak_name)]
-    da = ["Day-ahead" if f else "" for f in cov[complete] > eps]
-    use = pd.Series(join(b, pk, da), index=idx).where(delivered, "")
-    off = pd.Series(join(b, pk), index=idx).where(cov[offset] > eps, "")
-    return pd.DataFrame({"use": use, "offset": off})
+    pk_hour = mkt.is_peak[idx].to_numpy()
+    eex = (cov["EEX Base MW"] + cov["EEX Peak MW"]).abs().to_numpy() > eps
+    has_peak = cov["EEX Peak MW"].abs().to_numpy() > eps
+    product = pd.Series(["Peak" if p and k else "Base" for p, k in zip(pk_hour, has_peak)], index=idx)
+    delivered = cov["delivered MW"].abs().to_numpy() > eps
+    da = cov[complete].to_numpy() > eps
+    use = [("" if not d else (pr + (" + Day-ahead" if a else "")) if e else "Day-ahead")
+           for d, e, a, pr in zip(delivered, eex, da, product)]
+    off = [pr if (o and e) else "" for o, e, pr in zip(cov[offset].to_numpy() > eps, eex, product)]
+    return pd.DataFrame({"use": use, "offset": off}, index=idx)
 
 
 def label_week(labels: pd.Series, index: pd.DatetimeIndex) -> pd.DataFrame:
@@ -306,12 +290,14 @@ def hedge_view(q) -> None:
         if parts:
             st.caption("EEX contracts behind these products over the period shown: " + " · ".join(parts) + ".")
     st.caption(
-        ("Left: what supplies each delivered hour — the EEX product(s) covering it, or day-ahead purchase for the "
-         "volume no EEX product covers. Right: the hours where an EEX product bought for the client is not "
-         "delivered and is sold back in day-ahead." if sale else
-         "Left: what offsets each received hour — the EEX product(s) sold against it, or day-ahead resale for the "
-         "volume no EEX product covers. Right: the hours where an EEX product sold is not received and is bought "
+        ("Left: product supplying each delivered hour — Peak on peak hours, Base on offpeak hours, Day-ahead for "
+         "the part no EEX product covers. Right: product whose volume is not delivered at that hour and is sold "
+         "back in day-ahead." if sale else
+         "Left: product offsetting each received hour — Peak on peak hours, Base on offpeak hours, Day-ahead for "
+         "the part no EEX product covers. Right: product whose volume is not received at that hour and is bought "
          "back in day-ahead.")
+        + " Reading in Peak / Offpeak: EEX Base + Peak held together = Peak on peak hours + Offpeak on offpeak "
+          "hours (the Offpeak is carried by the Base contract, Offpeak is not listed on EEX France)."
         + " Volumes in MWh are in the table above."
         + (" * : not the same every week of the period, most frequent shown; choose a month for the exact split."
            if (grid_use.stack().str.endswith("*").any() or grid_off.stack().str.endswith("*").any()) else ""))
