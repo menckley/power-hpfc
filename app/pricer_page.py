@@ -99,7 +99,7 @@ except Exception as exc:                             # message sans le jeton
     st.stop()
 
 from pricer import archive                           # noqa: E402
-from pricer.hedging import FULL_DA, STRATEGIES       # noqa: E402
+from pricer.hedging import FULL_DA, STRATEGIES, hedge_summary  # noqa: E402
 from pricer.journal import archive_to_github         # noqa: E402
 from pricer.market import Market                     # noqa: E402
 from pricer.products import (WEEKDAYS, as_swap, block, custom, eex, empty_grid,  # noqa: E402
@@ -167,6 +167,92 @@ def show_items(items: dict) -> None:
         return "—" if v is None else str(v)
     st.dataframe(pd.DataFrame({"Item": list(items), "Value": [fmt(v) for v in items.values()]}),
                  use_container_width=True, hide_index=True)
+
+
+# ------------------------------------------------------------------ couverture en semaine type
+COLORS = {"eex": "#2F5E9E", "mixed": "#2A7F78", "da": "#9A6B1F", "offset": "#6E4A8E"}
+
+
+def _grid_style(values: pd.DataFrame, colors: pd.DataFrame):
+    return values.style.apply(lambda _: colors.map(lambda c: f"background-color: {c}; color: #FFFFFF" if c else ""),
+                              axis=None)
+
+
+def hedge_view(q) -> None:
+    """Volumes de couverture de la stratégie choisie (ou d'une autre stratégie évaluée) et leur répartition sur une
+    semaine type : heures livrées par source (EEX Base, EEX Peak, day-ahead) et volumes compensés en day-ahead."""
+    from pricer.hedging import coverage, full_da_hedge, hedge as build_hedge, typical_week
+    chosen = q.context["strategy selected"]
+    options = list(q.strategies.index) if len(q.strategies) else [chosen]
+    c1, c2 = st.columns(2)
+    shown = c1.selectbox("Strategy shown", options, index=options.index(chosen) if chosen in options else 0,
+                         help="The strategy selected for the price, or any other strategy evaluated.")
+    if shown == chosen:
+        h = q.hedge
+    elif shown == FULL_DA:
+        h = full_da_hedge(mkt, q.product)
+    else:
+        h = build_hedge(mkt, q.product, shown)
+    cov = coverage(mkt, q.product, h)
+    if cov.empty:
+        st.caption("Nothing to show.")
+        return
+    months = sorted(mkt.month[cov.index].unique())
+    period = c2.selectbox("Period", ["Whole period"] + months)
+    month = None if period == "Whole period" else period
+    sel = cov if month is None else cov[mkt.month[cov.index] == month]
+    sale = q.side == "sell"
+    complete, offset = ("day-ahead purchase MW", "day-ahead resale MW") if sale else \
+        ("day-ahead resale MW", "day-ahead purchase MW")
+
+    vol = {("Delivered to the client" if sale else "Received from the counterparty"): sel["delivered MW"].sum(),
+           "EEX Base (opposite side of the deal)": sel["EEX Base MW"].sum(),
+           "EEX Peak (opposite side of the deal)": sel["EEX Peak MW"].sum(),
+           "Day-ahead purchases": sel["day-ahead purchase MW"].sum(),
+           "Day-ahead resales": sel["day-ahead resale MW"].sum()}
+    v = pd.DataFrame({"MWh": list(vol.values())}, index=list(vol))
+    v["% of delivered"] = 100 * v["MWh"] / v["MWh"].iloc[0] if v["MWh"].iloc[0] else float("nan")
+    st.markdown(f"**Volumes** · {shown} · {period.lower() if month is None else period}")
+    show(v, 1)
+
+    wk = {c: typical_week(mkt, cov, c, month) for c in ("delivered MW", "EEX Base MW", "EEX Peak MW", complete, offset)}
+    text = pd.DataFrame("", index=wk["delivered MW"].index, columns=wk["delivered MW"].columns)
+    color = text.copy()
+    for r in text.index:
+        for c in text.columns:
+            if wk["delivered MW"].at[r, c] <= 1e-9:
+                continue
+            parts = [(lbl, wk[col].at[r, c]) for lbl, col in (("B", "EEX Base MW"), ("P", "EEX Peak MW"),
+                                                              ("DA", complete))]
+            text.at[r, c] = " ".join(f"{lbl} {x:.2f}" for lbl, x in parts if abs(x) > 5e-3)
+            eex_part = abs(wk["EEX Base MW"].at[r, c]) + abs(wk["EEX Peak MW"].at[r, c]) > 5e-3
+            da_part = wk[complete].at[r, c] > 5e-3
+            color.at[r, c] = COLORS["mixed"] if eex_part and da_part else COLORS["eex"] if eex_part else COLORS["da"]
+    g1, g2 = st.columns(2)
+    with g1:
+        st.markdown("**Delivered hours, by source**" if sale else "**Received hours, by offset**")
+        st.dataframe(_grid_style(text, color), use_container_width=True, height=36 * 25)
+        st.caption(f"Average MW per hour of a typical week. B = EEX Base, P = EEX Peak, DA = day-ahead "
+                   f"{'purchase' if sale else 'resale'}. Colours: blue = EEX only, teal = EEX and day-ahead, "
+                   "amber = day-ahead only.")
+    off_text = wk[offset].map(lambda x: f"{x:.2f}" if x > 5e-3 else "")
+    off_color = wk[offset].map(lambda x: COLORS["offset"] if x > 5e-3 else "")
+    with g2:
+        st.markdown("**Hedge volume resold in day-ahead**" if sale else "**Hedge volume bought in day-ahead**")
+        st.dataframe(_grid_style(off_text, off_color), use_container_width=True, height=36 * 25)
+        st.caption("Average MW per hour of a typical week: EEX volume bought for the client but not delivered at that "
+                   "hour, sold back in day-ahead." if sale else
+                   "Average MW per hour of a typical week: EEX volume sold but not received at that hour, bought in "
+                   "day-ahead.")
+
+    if len(h.table):
+        st.markdown("**EEX contracts**")
+        st.caption("Position equivalent to the deal: the hedge is traded on the opposite side.")
+        show(h.table, 2)
+    else:
+        st.caption("No EEX contract in this strategy.")
+    with st.expander("Hedge and residual values"):
+        show_items(q.hedge_values if shown == chosen else hedge_summary(mkt, q.product, h))
 
 
 # ------------------------------------------------------------------ en-tête
@@ -488,12 +574,7 @@ if q is not None:
                 st.caption("Auto selects the cheapest scenario; tie: least day-ahead volume, then fewest contracts.")
                 show(q.strategies, 2)
         with pane["Hedge"]:
-            if len(q.hedge.table):
-                st.caption("Position equivalent to the deal: the hedge is traded on the opposite side.")
-                show(q.hedge.table, 2)
-            else:
-                st.caption("No EEX contract in this scenario.")
-            show_items(q.hedge_values)
+            hedge_view(q)
         if "Risk" in pane:
             with pane["Risk"]:
                 if len(q.risk.by_month):
