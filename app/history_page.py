@@ -134,9 +134,15 @@ except (RuntimeError, requests.RequestException, ValueError) as exc:
     st.error(f"Pricing journal not readable: {exc}")
     st.stop()
 
-top = st.columns([4, 1])
-top[0].caption(f"Source: {origin} · every pricing archived from the Pricer page (one row per click on Price).")
-if top[1].button("Refresh"):
+def show(df: pd.DataFrame, decimals: int = 2, index: bool = True) -> None:
+    num = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and not pd.api.types.is_bool_dtype(df[c])]
+    st.dataframe(df.style.format({c: f"{{:,.{decimals}f}}" for c in num}, na_rep="—"),
+                 use_container_width=True, hide_index=not index)
+
+
+top = st.columns([5, 1])
+top[0].caption(f"Source: {origin} · one row per click on Price.")
+if top[1].button("Refresh", use_container_width=True):
     head_sha.clear()
     st.rerun()
 
@@ -147,32 +153,37 @@ if journal.empty:
 journal = journal.sort_values("priced_at_utc", ascending=False).reset_index(drop=True)
 m = st.columns(4)
 m[0].metric("Pricings", f"{len(journal)}")
-m[1].metric("Total volume priced", f"{journal['volume_mwh'].sum():,.0f} MWh")
+m[1].metric("Volume priced", f"{journal['volume_mwh'].sum():,.0f} MWh")
 m[2].metric("Last pricing", pd.to_datetime(journal["priced_at_utc"].iloc[0]).tz_convert("Europe/Paris")
             .strftime("%d/%m/%Y %H:%M"))
 m[3].metric("Deals labelled", f"{journal['label'].nunique()}")
 
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
 d1, d2, _ = st.columns([1, 1, 3])
-d1.download_button("Download all (CSV)", journal.to_csv(index=False).encode("utf-8"),
-                   file_name=f"pricings_{stamp}.csv", mime="text/csv")
-d2.download_button("Download all (Excel)", excel_bytes(journal, details), file_name=f"pricings_{stamp}.xlsx",
-                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-st.caption("CSV: the journal, one row per pricing. Excel: the same journal plus the price build-up, the scenarios "
-           "compared, the EEX hedge and the warnings of every pricing (one sheet each).")
+d1.download_button("Export all (CSV)", journal.to_csv(index=False).encode("utf-8"),
+                   file_name=f"pricings_{stamp}.csv", mime="text/csv", use_container_width=True,
+                   help="The journal, one row per pricing.")
+d2.download_button("Export all (Excel)", excel_bytes(journal, details), file_name=f"pricings_{stamp}.xlsx",
+                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True,
+                   help="The journal plus the price build-up, the scenarios, the EEX hedge and the warnings of every "
+                        "pricing (one sheet each).")
 
 shown = journal.assign(priced=pd.to_datetime(journal["priced_at_utc"]).dt.tz_convert("Europe/Paris")
                        .dt.strftime("%d/%m/%Y %H:%M"))
 cols = ["priced", "label", "product", "side", "settlement", "delivery_start", "delivery_end", "volume_mwh",
         "fair_price", "offer_price", "margin_eur", "risk_cost_eur", "hedging", "pricing_date", "pricer_version"]
 st.dataframe(shown[[c for c in cols if c in shown.columns]], use_container_width=True, hide_index=True,
-             column_config={"priced": "Priced (Paris)", "volume_mwh": st.column_config.NumberColumn("MWh", format="%.0f"),
+             column_config={"priced": "Priced (Paris)", "label": "Label", "product": "Product", "side": "Side",
+                            "settlement": "Settlement", "delivery_start": "From", "delivery_end": "To",
+                            "volume_mwh": st.column_config.NumberColumn("MWh", format="%.0f"),
                             "fair_price": st.column_config.NumberColumn("Fair €/MWh", format="%.2f"),
                             "offer_price": st.column_config.NumberColumn("Offer €/MWh", format="%.2f"),
                             "margin_eur": st.column_config.NumberColumn("Margin €", format="%.0f"),
-                            "risk_cost_eur": st.column_config.NumberColumn("Risk €", format="%.0f")})
+                            "risk_cost_eur": st.column_config.NumberColumn("Risk €", format="%.0f"),
+                            "hedging": "Hedging", "pricing_date": "Curve date", "pricer_version": "Pricer"})
 
 # ------------------------------------------------------------------ détail d'un pricing
+st.divider()
 st.subheader("Pricing detail")
 pick = st.selectbox("Pricing", list(journal.index),
                     format_func=lambda i: f"{shown.loc[i, 'priced']} · {journal.loc[i, 'label']} · "
@@ -183,32 +194,36 @@ if d is None:
     st.warning(f"Detailed file {row['folder']} not found in the repository.")
 else:
     p = d["product"]
+    st.caption(f"{p['name']} · {p['side']} · {'physical' if p['physical'] else 'financial swap'} · delivery "
+               f"{p['delivery_start']} → {p['delivery_end']} · HPFC of {d['curve']['pricing_date']} · "
+               f"pricer {d.get('pricer_version', '—')}")
     k = st.columns(4)
     k[0].metric("Offer price", f"{d['offer_price']:,.2f} €/MWh")
     k[1].metric("Fair price", f"{d['fair_price']:,.2f} €/MWh")
     k[2].metric("Volume", f"{p['volume_mwh']:,.0f} MWh")
     k[3].metric("Hedging", d.get("hedging") or "—")
-    st.caption(f"{p['name']} · {p['side']} · {'physical' if p['physical'] else 'financial swap'} · delivery "
-               f"{p['delivery_start']} → {p['delivery_end']} · HPFC of {d['curve']['pricing_date']} · "
-               f"pricer {d.get('pricer_version', '—')}")
     if d.get("option"):
         o = d["option"]
-        st.info(f"Option: **{o['formula']}** — expiry {o['expiry']}, F {o['forward €/MWh']:.2f} €/MWh")
-        if o.get("legs"):
-            st.dataframe(pd.DataFrame(o["legs"]).set_index("leg").round(4), use_container_width=True)
+        st.markdown(f"**{o['formula']}** · expiry {o['expiry']} · F {o['forward €/MWh']:.2f} €/MWh")
     if d.get("indexation"):
-        st.info(f"Indexed price: **{d['indexation']['formula']}** — {d['indexation'].get('index', '')}")
-    for w in d.get("warnings") or []:
-        st.warning(w)
-    st.markdown("**Price build-up**")
-    st.dataframe(pd.DataFrame(d["price_build_up"]).set_index("item").round(2), use_container_width=True)
-    if d.get("strategies"):
-        st.markdown("**Scenarios compared**")
-        st.dataframe(pd.DataFrame(d["strategies"]).set_index("strategy").round(2), use_container_width=True)
-    if d.get("hedge"):
-        st.markdown("**EEX hedge**")
-        st.dataframe(pd.DataFrame(d["hedge"]).round(2), use_container_width=True, hide_index=True)
-    with st.expander("Full record (JSON)"):
+        st.markdown(f"**{d['indexation']['formula']}** · {d['indexation'].get('index', '')}")
+    if d.get("warnings"):
+        st.warning("\n".join(f"- {w}" for w in d["warnings"]))
+    tabs = ["Price build-up"] + (["Legs"] if d.get("option") and d["option"].get("legs") else []) + \
+           (["Scenarios"] if d.get("strategies") else []) + (["EEX hedge"] if d.get("hedge") else []) + ["Full record"]
+    pane = dict(zip(tabs, st.tabs(tabs)))
+    with pane["Price build-up"]:
+        show(pd.DataFrame(d["price_build_up"]).set_index("item"), 2)
+    if "Legs" in pane:
+        with pane["Legs"]:
+            show(pd.DataFrame(d["option"]["legs"]).set_index("leg"), 4)
+    if "Scenarios" in pane:
+        with pane["Scenarios"]:
+            show(pd.DataFrame(d["strategies"]).set_index("strategy"), 2)
+    if "EEX hedge" in pane:
+        with pane["EEX hedge"]:
+            show(pd.DataFrame(d["hedge"]), 2, index=False)
+    with pane["Full record"]:
         st.json(d, expanded=False)
-    st.download_button("Download this pricing (JSON)", json.dumps(d, indent=1, ensure_ascii=False).encode("utf-8"),
-                       file_name=Path(row["folder"]).name, mime="application/json")
+        st.download_button("Download this pricing (JSON)", json.dumps(d, indent=1, ensure_ascii=False).encode("utf-8"),
+                           file_name=Path(row["folder"]).name, mime="application/json")

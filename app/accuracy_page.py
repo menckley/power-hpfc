@@ -61,8 +61,8 @@ def load_daily(sig: str) -> pd.DataFrame:
 
 
 st.title("HPFC accuracy")
-st.caption("Every archived HPFC compared with the day-ahead price that actually cleared (ENTSO-E). "
-           "Error = HPFC − day-ahead: positive means the curve was too high. Only fully delivered days count.")
+st.caption("Archived HPFCs compared with the cleared day-ahead price (ENTSO-E). Error = HPFC − day-ahead; "
+           "only fully delivered days count.")
 
 try:
     daily = load_daily(signature())
@@ -86,7 +86,7 @@ d1 = summ.loc["D+1"] if "D+1" in summ.index and summ.loc["D+1", "observations"] 
 m[3].metric("D+1 hourly MAE", "—" if d1 is None else f"{d1['hourly_mae']:.2f} €/MWh")
 
 # ------------------------------------------------------------------ vue d'un jour
-st.subheader("Day view: forecast vs market")
+st.subheader("Day view")
 days = sorted(view["delivery_date"].unique(), reverse=True)
 v1, v2 = st.columns(2)
 day = v1.selectbox("Delivery day", days, format_func=lambda d: f"{d:%a %d/%m/%Y}")
@@ -135,8 +135,9 @@ else:
                 delta_color="off",
                 help=f"Standard deviation of the realized hourly day-ahead prices of the day. The comparison is "
                      f"with the median of the same index over the previous {VOL_WINDOW} days.")
-    st.caption(
-        "**How to read it.** Orange dashed: what the HPFC forecast for each hour. Blue: what the day-ahead market "
+    with st.expander("How to read this view"):
+        st.markdown(
+            "Orange dashed: what the HPFC forecast for each hour. Blue: what the day-ahead market "
         "actually cleared. **Model precision** = hourly MAE ÷ average realized price; reading scale (this page's "
         "convention, not a market standard): < 10 % very good · 10–20 % good · 20–35 % fair · > 35 % poor. "
         "**Market volatility** = how much the realized price moved within the day; on a volatile day "
@@ -155,10 +156,11 @@ table = summ.rename(columns={
 st.dataframe(table, use_container_width=True,
              column_config={c: st.column_config.NumberColumn(format="%.2f")
                             for c in table.columns if c not in ("Obs.", "Curves", "Days", "From", "To")})
-st.caption("€/MWh except MAPE and correlation. Bias = mean error; MAE = mean absolute error. "
-           "Profile corr. = correlation of the 24 hourly prices within the day (shape quality). "
-           "Short horizons are anchored on EEX Day / Weekend / Week settlements, so the level error there "
-           "mostly measures forward vs day-ahead; the hourly shape is the HPFC's own contribution.")
+with st.expander("Definitions"):
+    st.markdown("€/MWh except MAPE and correlation. Bias = mean error; MAE = mean absolute error. "
+                "Profile corr. = correlation of the 24 hourly prices within the day (shape quality). "
+                "Short horizons are anchored on EEX Day / Weekend / Week settlements, so the level error there "
+                "mostly measures forward vs day-ahead; the hourly shape is the HPFC's own contribution.")
 
 st.subheader("Daily base: HPFC vs day-ahead")
 options = [int(x) for x in sorted(view["horizon_days"].unique())]

@@ -15,7 +15,7 @@ if str(REPO / "src") not in sys.path:
 
 import streamlit as st                          # noqa: E402
 
-st.set_page_config(page_title="Power pricing desk", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Power Pricing Desk", layout="wide")
 
 
 def code_signature() -> tuple:
@@ -35,10 +35,10 @@ if getattr(_state, "signature", _sig) != _sig:
     st.cache_data.clear()
 _state.signature = _sig
 
-pages = [
-    st.Page("pricer_page.py", title="Pricer", icon="💶", default=True),
-    st.Page("history_page.py", title="Pricing history", icon="🗂️"),
-    st.Page("hpfc_page.py", title="HPFC curves", icon="📈"),
-    st.Page("accuracy_page.py", title="HPFC accuracy", icon="🎯"),
-]
+pages = {
+    "Pricing": [st.Page("pricer_page.py", title="Pricer", default=True),
+                st.Page("history_page.py", title="Pricing history")],
+    "Market data": [st.Page("hpfc_page.py", title="HPFC curves"),
+                    st.Page("accuracy_page.py", title="HPFC accuracy")],
+}
 st.navigation(pages).run()

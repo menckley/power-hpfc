@@ -21,8 +21,8 @@ from marketdata import DataNotFoundError        # noqa: E402
 
 MARKET = "FR"
 DATA = REPO / "data"
-GRAN_LABELS = {"Heure": "hour", "Jour": "day", "Semaine": "week", "Mois": "month",
-               "Trimestre": "quarter", "Année": "year"}
+GRAN_LABELS = {"Hour": "hour", "Day": "day", "Week": "week", "Month": "month",
+               "Quarter": "quarter", "Year": "year"}
 PROFILE_LABELS = {"Base": "base", "Peak": "peak", "Offpeak": "offpeak"}
 
 
@@ -51,65 +51,64 @@ def load_metadata(pricing: date, signature: str) -> dict:
 signature = archive_signature()
 available = archive.list_curves(MARKET, DATA)
 if not available:
-    st.error(f"Aucune courbe {MARKET} archivée dans {DATA}.")
+    st.error(f"No {MARKET} curve archived in {DATA}.")
     st.stop()
 cfg = get_config()
 latest = available[-1]
 
 # ------------------------------------------------------------------ critères (barre latérale)
 with st.sidebar:
-    st.header("Critères")
+    st.subheader("Selection")
 
-    mode = st.radio("Courbe(s)", ["Dernière", "Une date", "Plusieurs dates", "Période"], horizontal=False,
-                    help=f"{len(available)} courbes archivées, du {available[0]} au {latest}")
-    if mode == "Dernière":
+    mode = st.radio("Curves", ["Latest", "One date", "Several dates", "Period"], horizontal=False,
+                    help=f"{len(available)} curves archived, from {available[0]} to {latest}")
+    if mode == "Latest":
         pricing = "latest"
-        st.caption(f"Courbe du {latest}")
-    elif mode == "Une date":
-        pricing = st.selectbox("Date de pricing", available[::-1], format_func=str)
-    elif mode == "Plusieurs dates":
-        chosen = st.multiselect("Dates de pricing", available[::-1], default=available[-2:][::-1],
+        st.caption(f"Curve of {latest}")
+    elif mode == "One date":
+        pricing = st.selectbox("Pricing date", available[::-1], format_func=str)
+    elif mode == "Several dates":
+        chosen = st.multiselect("Pricing dates", available[::-1], default=available[-2:][::-1],
                                 format_func=str)
         pricing = sorted(chosen)
     else:
         c1, c2 = st.columns(2)
-        p_from = c1.selectbox("Du", available, index=max(0, len(available) - 10), format_func=str)
-        p_to = c2.selectbox("Au", available, index=len(available) - 1, format_func=str)
+        p_from = c1.selectbox("From", available, index=max(0, len(available) - 10), format_func=str)
+        p_to = c2.selectbox("To", available, index=len(available) - 1, format_func=str)
         pricing = (p_from, p_to)
 
     st.divider()
-    whole = st.checkbox("Toute la période de livraison", value=True)
+    whole = st.checkbox("Whole delivery period", value=True)
     deliv_start = deliv_end = None
     if not whole:
         ref = load_curve_cached(latest, signature)
         dmin = pd.to_datetime(ref["local"]).dt.date.min()
         dmax = pd.to_datetime(ref["local"]).dt.date.max()
         c1, c2 = st.columns(2)
-        deliv_start = c1.date_input("Début de livraison", value=dmin, min_value=dmin, max_value=dmax,
+        deliv_start = c1.date_input("Delivery start", value=dmin, min_value=dmin, max_value=dmax,
                                     format="DD/MM/YYYY")
-        deliv_end = c2.date_input("Fin de livraison", value=dmax, min_value=dmin, max_value=dmax,
+        deliv_end = c2.date_input("Delivery end", value=dmax, min_value=dmin, max_value=dmax,
                                   format="DD/MM/YYYY")
 
     st.divider()
-    gran_label = st.selectbox("Granularité", list(GRAN_LABELS), index=3)
+    gran_label = st.selectbox("Granularity", list(GRAN_LABELS), index=3)
     granularity = GRAN_LABELS[gran_label]
-    profile_label = st.radio("Profil", list(PROFILE_LABELS), horizontal=True)
+    profile_label = st.radio("Profile", list(PROFILE_LABELS), horizontal=True)
     profile = PROFILE_LABELS[profile_label]
     tz = "local"
     if granularity == "hour":
-        tz = "utc" if st.radio("Heure", ["Paris", "UTC"], horizontal=True) == "UTC" else "local"
+        tz = "utc" if st.radio("Time", ["Paris", "UTC"], horizontal=True) == "UTC" else "local"
 
 # ------------------------------------------------------------------ extraction
-st.title("⚡ HPFC France")
-st.caption(f"Dernière courbe archivée : **{latest}** · {len(available)} courbes disponibles · "
-           f"mise à jour chaque matin par le workflow GitHub")
+st.title("HPFC curves")
+st.caption(f"Latest curve {latest} · {len(available)} curves archived · updated every morning")
 
 if isinstance(pricing, list) and not pricing:
-    st.info("Choisis au moins une date de pricing dans la barre latérale.")
+    st.info("Select at least one pricing date in the sidebar.")
     st.stop()
 
 try:
-    with st.spinner("Extraction…"):
+    with st.spinner("Extracting…"):
         result, dates, partial = extract(MARKET, cfg, pricing, granularity, profile, tz,
                                          deliv_start, deliv_end, DATA,
                                          loader=lambda m, d: load_curve_cached(d, signature))
@@ -124,17 +123,17 @@ price_cols = ["price"] if single else list(result.columns)
 if single:
     meta = load_metadata(dates[0], signature)
     k = st.columns(5)
-    k[0].metric("Date de pricing", str(dates[0]))
-    k[1].metric(f"Prix moyen {profile_label.lower()}", f"{result['price'].mean():.2f} €/MWh")
+    k[0].metric("Pricing date", str(dates[0]))
+    k[1].metric(f"Average {profile_label.lower()} price", f"{result['price'].mean():.2f} €/MWh")
     k[2].metric("Minimum", f"{result['price'].min():.2f}")
     k[3].metric("Maximum", f"{result['price'].max():.2f}")
-    k[4].metric("Produits EEX cotés", meta.get("products", {}).get("quoted", "—"))
+    k[4].metric("EEX products quoted", meta.get("products", {}).get("quoted", "—"))
 else:
-    st.markdown(f"**{len(dates)} courbes comparées** : {', '.join(map(str, dates))}")
+    st.caption(f"{len(dates)} curves compared: {', '.join(map(str, dates))}")
 
 if partial:
-    st.warning("Périodes partielles (toutes leurs heures ne sont pas dans la courbe ou la fenêtre de "
-               "livraison) : " + ", ".join(str(p.date()) for p in partial))
+    st.warning("Partial periods (not all their hours are in the curve or the delivery window): "
+               + ", ".join(str(p.date()) for p in partial))
 
 # ------------------------------------------------------------------ graphique
 fig = go.Figure()
@@ -145,7 +144,7 @@ for col in price_cols:
                           name=str(dates[0]) if col == "price" else col, line={"width": 1.4}))
 fig.update_layout(height=430, margin={"l": 10, "r": 10, "t": 30, "b": 10},
                   yaxis_title="€/MWh", hovermode="x unified",
-                  legend={"title": "Date de pricing", "orientation": "h", "y": 1.08})
+                  legend={"title": "Pricing date", "orientation": "h", "y": 1.08})
 st.plotly_chart(fig, use_container_width=True)
 
 # ------------------------------------------------------------------ tableau et téléchargements
@@ -163,12 +162,13 @@ excel = io.BytesIO()
 table.to_excel(excel, sheet_name="hpfc")
 
 c1, c2, c3 = st.columns([1, 1, 4])
-c1.download_button("Télécharger en CSV", table.to_csv().encode("utf-8"), f"{stem}.csv", "text/csv")
-c2.download_button("Télécharger en Excel", excel.getvalue(), f"{stem}.xlsx",
+c1.download_button("Download CSV", table.to_csv().encode("utf-8"), f"{stem}.csv", "text/csv",
+                   use_container_width=True)
+c2.download_button("Download Excel", excel.getvalue(), f"{stem}.xlsx", use_container_width=True, mime=
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 st.dataframe(table, use_container_width=True, height=420)
 
 if single:
-    with st.expander("Métadonnées de la courbe (contrôles, paramètres, version du code)"):
+    with st.expander("Curve metadata (checks, parameters, code version)"):
         st.code(json.dumps({k: v for k, v in meta.items() if k != "monthly"}, indent=2, ensure_ascii=False),
                 language="json")
