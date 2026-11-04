@@ -170,7 +170,77 @@ def show_items(items: dict) -> None:
 
 
 # ------------------------------------------------------------------ couverture en semaine type
-COLORS = {"eex": "#2F5E9E", "mixed": "#2A7F78", "da": "#9A6B1F", "offset": "#6E4A8E"}
+COLORS = {"Base": "#2F5E9E", "Peak": "#A2543B", "Base + Peak": "#6E4A8E", "Day-ahead": "#9A6B1F",
+          "Base + Day-ahead": "#2A7F78", "Peak + Day-ahead": "#8A6A2B", "Base + Peak + Day-ahead": "#3F6F5A"}
+
+
+def _label_key(label: str) -> str:
+    """« Base M12-26 + Day-ahead* » → « Base + Day-ahead » (clé de couleur)."""
+    parts = [x.strip().split(" ")[0] for x in label.rstrip("*").split("+") if x.strip()]
+    return " + ".join(parts)
+
+
+def _label_color(label: str) -> str:
+    return COLORS.get(_label_key(label), "#4A4F5A") if label else ""
+
+
+def _legend(labels: set) -> str:
+    keys = [k for k in COLORS if k in {_label_key(x) for x in labels if x}]
+    chips = "".join(f'<span style="background:{COLORS[k]};color:#FFF;padding:2px 8px;margin-right:6px;'
+                    f'border-radius:3px;font-size:0.8rem">{k}</span>' for k in keys)
+    return f"<div style='margin:4px 0 2px 0'>{chips}</div>"
+
+
+def hour_labels(h, cov: pd.DataFrame, complete: str, offset: str, with_contract: bool) -> pd.DataFrame:
+    """Pour chaque heure : produit(s) utilisé(s) sur l'heure livrée (EEX Base, EEX Peak, day-ahead) et produit(s)
+    revendu(s) / racheté(s) en day-ahead hors livraison. Un produit couvre son heure en entier : on indique lequel,
+    les MW sont dans le tableau des volumes."""
+    eps = 5e-4
+    idx = cov.index
+    base_name = pd.Series("", index=idx)
+    peak_name = pd.Series("", index=idx)
+    t = h.table
+    if with_contract and len(t) and "Base MW" in t.columns:
+        for r in t.itertuples():
+            m = (mkt.day[idx] >= r.start) & (mkt.day[idx] <= r.end)
+            if abs(t.loc[r.Index, "Base MW"]) > eps:
+                base_name[m.to_numpy()] = f" {r.Index}"
+            if abs(t.loc[r.Index, "Peak MW"]) > eps:
+                peak_name[(m & mkt.is_peak[idx]).to_numpy()] = f" {r.Index}"
+    elif with_contract and len(t):
+        name = str(t.index[0]).split(" ", 1)[-1]
+        base_name[:] = f" {name}"
+        peak_name[:] = f" {name}"
+    has_b = cov["EEX Base MW"].abs() > eps
+    has_p = cov["EEX Peak MW"].abs() > eps
+    delivered = cov["delivered MW"].abs() > eps
+
+    def join(*parts):
+        return [" + ".join(x for x in row if x) for row in zip(*parts)]
+
+    b = ["Base" + n if f else "" for f, n in zip(has_b, base_name)]
+    pk = ["Peak" + n if f else "" for f, n in zip(has_p, peak_name)]
+    da = ["Day-ahead" if f else "" for f in cov[complete] > eps]
+    use = pd.Series(join(b, pk, da), index=idx).where(delivered, "")
+    off = pd.Series(join(b, pk), index=idx).where(cov[offset] > eps, "")
+    return pd.DataFrame({"use": use, "offset": off})
+
+
+def label_week(labels: pd.Series, index: pd.DatetimeIndex) -> pd.DataFrame:
+    """Semaine type de libellés : libellé le plus fréquent de chaque (heure, jour) sur les heures où il y en a un ;
+    « * » s'il change d'une semaine à l'autre."""
+    s = labels.reindex(index).fillna("")
+    s = s[s != ""]
+    out = pd.DataFrame("", index=[f"{x:02d}h-{x + 1:02d}h" for x in range(24)],
+                       columns=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+    if s.empty:
+        return out
+    loc = s.index.tz_convert(mkt.tz)
+    df = pd.DataFrame({"l": s.to_numpy(), "h": loc.hour, "d": loc.weekday})
+    for (hh, dd), g in df.groupby(["h", "d"]):
+        counts = g["l"].value_counts()
+        out.iat[hh, dd] = counts.index[0] + ("*" if len(counts) > 1 else "")
+    return out
 
 
 def _grid_style(values: pd.DataFrame, colors: pd.DataFrame):
@@ -215,35 +285,36 @@ def hedge_view(q) -> None:
     st.markdown(f"**Volumes** · {shown} · {period.lower() if month is None else period}")
     show(v, 1)
 
-    wk = {c: typical_week(mkt, cov, c, month) for c in ("delivered MW", "EEX Base MW", "EEX Peak MW", complete, offset)}
-    text = pd.DataFrame("", index=wk["delivered MW"].index, columns=wk["delivered MW"].columns)
-    color = text.copy()
-    for r in text.index:
-        for c in text.columns:
-            if wk["delivered MW"].at[r, c] <= 1e-9:
-                continue
-            parts = [(lbl, wk[col].at[r, c]) for lbl, col in (("B", "EEX Base MW"), ("P", "EEX Peak MW"),
-                                                              ("DA", complete))]
-            text.at[r, c] = " ".join(f"{lbl} {x:.2f}" for lbl, x in parts if abs(x) > 5e-3)
-            eex_part = abs(wk["EEX Base MW"].at[r, c]) + abs(wk["EEX Peak MW"].at[r, c]) > 5e-3
-            da_part = wk[complete].at[r, c] > 5e-3
-            color.at[r, c] = COLORS["mixed"] if eex_part and da_part else COLORS["eex"] if eex_part else COLORS["da"]
+    labels = hour_labels(h, cov, complete, offset, with_contract=False)
+    grid_use = label_week(labels["use"], sel.index)
+    grid_off = label_week(labels["offset"], sel.index)
     g1, g2 = st.columns(2)
     with g1:
-        st.markdown("**Delivered hours, by source**" if sale else "**Received hours, by offset**")
-        st.dataframe(_grid_style(text, color), use_container_width=True, height=36 * 25)
-        st.caption(f"Average MW per hour of a typical week. B = EEX Base, P = EEX Peak, DA = day-ahead "
-                   f"{'purchase' if sale else 'resale'}. Colours: blue = EEX only, teal = EEX and day-ahead, "
-                   "amber = day-ahead only.")
-    off_text = wk[offset].map(lambda x: f"{x:.2f}" if x > 5e-3 else "")
-    off_color = wk[offset].map(lambda x: COLORS["offset"] if x > 5e-3 else "")
+        st.markdown("**Product used, per delivered hour**" if sale else "**Product used, per received hour**")
+        st.dataframe(_grid_style(grid_use, grid_use.map(_label_color)), use_container_width=True, height=36 * 25)
     with g2:
-        st.markdown("**Hedge volume resold in day-ahead**" if sale else "**Hedge volume bought in day-ahead**")
-        st.dataframe(_grid_style(off_text, off_color), use_container_width=True, height=36 * 25)
-        st.caption("Average MW per hour of a typical week: EEX volume bought for the client but not delivered at that "
-                   "hour, sold back in day-ahead." if sale else
-                   "Average MW per hour of a typical week: EEX volume sold but not received at that hour, bought in "
-                   "day-ahead.")
+        st.markdown("**Product resold in day-ahead**" if sale else "**Product bought back in day-ahead**")
+        st.dataframe(_grid_style(grid_off, grid_off.map(_label_color)), use_container_width=True, height=36 * 25)
+    st.markdown(_legend(set(grid_use.stack()) | set(grid_off.stack())), unsafe_allow_html=True)
+    if len(h.table) and "start" in h.table.columns:
+        span = sel.index if len(sel) else cov.index
+        d0, d1 = mkt.day[span].min(), mkt.day[span].max()
+        used = h.table[(h.table["start"] <= d1) & (h.table["end"] >= d0)]
+        parts = [f"{prof} = {', '.join(map(str, used.index[used[f'{prof} MW'].abs() > 5e-4]))}"
+                 for prof in ("Base", "Peak") if f"{prof} MW" in used.columns
+                 and (used[f"{prof} MW"].abs() > 5e-4).any()]
+        if parts:
+            st.caption("EEX contracts behind these products over the period shown: " + " · ".join(parts) + ".")
+    st.caption(
+        ("Left: what supplies each delivered hour — the EEX product(s) covering it, or day-ahead purchase for the "
+         "volume no EEX product covers. Right: the hours where an EEX product bought for the client is not "
+         "delivered and is sold back in day-ahead." if sale else
+         "Left: what offsets each received hour — the EEX product(s) sold against it, or day-ahead resale for the "
+         "volume no EEX product covers. Right: the hours where an EEX product sold is not received and is bought "
+         "back in day-ahead.")
+        + " Volumes in MWh are in the table above."
+        + (" * : not the same every week of the period, most frequent shown; choose a month for the exact split."
+           if (grid_use.stack().str.endswith("*").any() or grid_off.stack().str.endswith("*").any()) else ""))
 
     if len(h.table):
         st.markdown("**EEX contracts**")
