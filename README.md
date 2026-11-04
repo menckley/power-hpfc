@@ -1,5 +1,7 @@
 # power-hpfc
 
+> **Notice détaillée** — chaque calcul, chaque paramètre et les dépendances entre les dépôts : [docs/NOTICE.md](docs/NOTICE.md)
+
 Hourly Price Forward Curve (HPFC) du marché français de l'électricité, construite
 chaque jour à partir des settlements EEX et de l'historique day-ahead ENTSO-E.
 
