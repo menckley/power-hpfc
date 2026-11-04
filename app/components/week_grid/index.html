@@ -87,6 +87,7 @@ Click a day or an hour header to toggle the whole column or row.</p>
   window.addEventListener("message", e => {
     const d = e.data;
     if (!d || d.type !== "streamlit:render") return;
+    rendered = true;
     const a = d.args || {};
     if (d.theme) {
       const s = document.documentElement.style;
@@ -103,7 +104,15 @@ Click a day or an hour header to toggle the whole column or row.</p>
     }
     setHeight();
   });
-  send("streamlit:componentReady", {apiVersion: 1});
+  // « Prêt » renvoyé toutes les 500 ms jusqu'au premier affichage : si Streamlit recrée la grille et que la page
+  // se charge (depuis le cache) avant que Streamlit écoute, le premier message serait perdu et Streamlit
+  // afficherait au bout d'une minute « trouble loading the component ».
+  let rendered = false;
+  (function ready() {
+    if (rendered) return;
+    send("streamlit:componentReady", {apiVersion: 1});
+    setTimeout(ready, 500);
+  })();
 </script>
 </body>
 </html>

@@ -278,10 +278,20 @@ if kind == "grid":
     b[3].button("Peak 8-20h", on_click=fill, args=(lambda h, d, v: d < 5 and 8 <= h < 20,),
                 use_container_width=True)
     b[4].button("Invert", on_click=fill, args=(lambda h, d, v: not v,), use_container_width=True)
-    with prof:
-        changed = week_grid(st.session_state.grid.astype(bool).to_numpy().tolist(), st.session_state.grid_version)
-    if changed is not None:                          # cases cochées ou décochées à la souris
-        st.session_state.grid = pd.DataFrame(changed, columns=DAYS)
+    simple = prof.toggle("Table editor", value=False,
+                         help="Tick the hours one by one in a table, if the drag-and-drop grid does not display.")
+    if simple:
+        shown = st.session_state.grid.copy()
+        shown.index = [f"{h:02d}h-{h + 1:02d}h" for h in range(24)]
+        edited = prof.data_editor(shown, key=f"grid_editor_{st.session_state.grid_version}", height=36 * 25,
+                                  column_config={d: st.column_config.CheckboxColumn(d, width="small") for d in DAYS})
+        st.session_state.grid = edited.reset_index(drop=True).astype(bool).set_axis(DAYS, axis=1)
+    else:
+        with prof:
+            changed = week_grid(st.session_state.grid.astype(bool).to_numpy().tolist(),
+                                st.session_state.grid_version)
+        if changed is not None:                      # cases cochées ou décochées à la souris
+            st.session_state.grid = pd.DataFrame(changed, columns=DAYS)
     grid = st.session_state.grid.reset_index(drop=True).astype(bool)
     prof.caption(f"{int(grid.to_numpy().sum())} hours per week")
 
