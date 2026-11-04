@@ -387,10 +387,18 @@ if kind == "csv":
 terms_box = st.container(border=True)
 terms_box.markdown("**Pricing terms**")
 h1, h2 = terms_box.columns(2)
+level_method = None
+vol_source = None
+VOL_LABELS = {"implicite": "EEX implied", "historique": "Historical (futures)",
+              "prudente": "Prudent (max when selling, min when buying)"}
+LEVEL_LABELS = {"implicite": "EEX implied volatility", "historique": "Historical volatility of the futures",
+                "persistance": "Persistence proxy (conservative)"}
 if is_option:
-    h1.text_input("Volatility", "Implied from EEX option settlements", disabled=True,
-                  help="Recomputed at each pricing from the settlements of the session, compared with the "
-                       "historical volatility of the future.")
+    vol_default = getattr(settings, "option_vol_source", None) or "implicite"
+    vol_source = h1.selectbox("Premium volatility", list(VOL_LABELS), format_func=VOL_LABELS.get,
+                              index=list(VOL_LABELS).index(vol_default),
+                              help="Volatility used for the offer premium. The fair premium is always shown at the "
+                                   "EEX implied volatility; both are recomputed at each pricing.")
     strategy = "auto"
 elif indexed:
     h1.text_input("Hedging", "None: delivered hours sourced at the index", disabled=True,
@@ -404,6 +412,12 @@ else:
     labels = {"auto": "Auto (cheapest scenario)", **{k: k for k in (*STRATEGIES, FULL_DA)}}
     strategy = h1.selectbox("Hedging", list(labels), format_func=labels.get,
                             index=list(labels).index(settings.strategy))
+    level_default = getattr(settings, "deviation_method", None) or "persistance"
+    level_method = h1.selectbox("Level-risk volatility", list(LEVEL_LABELS), format_func=LEVEL_LABELS.get,
+                                index=list(LEVEL_LABELS).index(level_default),
+                                help="Volatility of the price level for volumes left in day-ahead without EEX "
+                                     "hedge. A month without market volatility falls back on the persistence proxy "
+                                     "(flagged in the Risk tab).")
 margin_mode = h2.radio("Margin", ["rules", "manual"], horizontal=True,
                        format_func=lambda s: {"rules": "Rules (marge.yaml)", "manual": "Manual"}[s])
 manual_value, manual_reason = None, ""
@@ -452,11 +466,13 @@ if priced:
             if is_option:
                 q_new = quote_option(mkt, structure, series_name, mw, side, settings, strike=strike_one,
                                      strike_low=strike_low, strike_high=strike_high,
-                                     manual_margin_eur_mwh=manual_value, manual_reason=manual_reason)
+                                     manual_margin_eur_mwh=manual_value, manual_reason=manual_reason,
+                                     vol_source=vol_source)
             elif indexed:
                 q_new = quote_indexed(mkt, build_product(), settings, manual_value, manual_reason)
             else:
-                q_new = quote(mkt, build_product(), settings, strategy, spot, manual_value, manual_reason)
+                q_new = quote(mkt, build_product(), settings, strategy, spot, manual_value, manual_reason,
+                              level_method=level_method)
         st.session_state.quote = q_new
         st.session_state.quote_source = source
         st.session_state.label = label_in.strip() or q_new.product.name[:60]
@@ -510,6 +526,14 @@ if q is not None:
     if q.warnings:
         st.warning("\n".join(f"- {w}" for w in q.warnings))
 
+    # ------------------------------------------- couverture : visible directement sous le résultat
+    if opt is None and terms is None:
+        with st.container(border=True):
+            st.markdown("#### Hedge coverage")
+            st.caption("Hourly split of the deal between EEX Base, EEX Peak and day-ahead, and the hedge volume "
+                       "offset in day-ahead, on a typical week of the selected period.")
+            hedge_view(q)
+
     # ---------------------------------------------------------- détail, par onglet
     tabs, panes = [], []
     if opt is not None:
@@ -517,7 +541,7 @@ if q is not None:
     elif terms is not None:
         tabs = ["Spread build-up", "Index by month"]
     else:
-        tabs = ["Price build-up"] + (["Scenarios"] if len(q.strategies) else []) + ["Hedge"] + \
+        tabs = ["Price build-up"] + (["Scenarios"] if len(q.strategies) else []) + \
                (["Risk"] if len(q.risk.by_month) or (q.deviation is not None and len(q.deviation.by_month)) else [])
     if len(q.financing):
         tabs.append("Funding")
@@ -573,8 +597,6 @@ if q is not None:
             with pane["Scenarios"]:
                 st.caption("Auto selects the cheapest scenario; tie: least day-ahead volume, then fewest contracts.")
                 show(q.strategies, 2)
-        with pane["Hedge"]:
-            hedge_view(q)
         if "Risk" in pane:
             with pane["Risk"]:
                 if len(q.risk.by_month):
@@ -582,13 +604,13 @@ if q is not None:
                                 f"{q.risk.confidence:.0%})")
                     show(q.risk.by_month, 0)
                 if q.deviation is not None and len(q.deviation.by_month):
-                    st.markdown(f"**Day-ahead deviation premium** · {q.deviation.cost:,.0f} € "
+                    st.markdown(f"**Day-ahead level premium** · {q.deviation.cost:,.0f} € "
                                 f"(σ {q.deviation.sigma:,.0f} €, {q.deviation.method})")
                     show(q.deviation.by_month, 2)
-                    st.caption("Price-level risk of volumes bought or sold in day-ahead without EEX hedge, measured "
-                               "on a naive persistence forecast (conservative proxy, 2021-2023 crisis excluded by "
-                               "default). To be replaced by the archived HPFC's measured error once the archive is "
-                               "long enough.")
+                    st.caption("Price-level risk of volumes bought or sold in day-ahead without EEX hedge. Market "
+                               "volatility (implied or historical): level σ = √(exp(σ²τ) − 1), τ to mid-month. "
+                               "Persistence proxy: error of a naive forecast on the spot history (2021-2023 crisis "
+                               "excluded), used for the months without market volatility.")
     if "Funding" in pane:
         with pane["Funding"]:
             st.caption("Funding of the sourcing: paid to the market before the client pays.")
