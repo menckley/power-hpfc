@@ -226,54 +226,6 @@ La feuille de route du pricer (options, TBx, flexibilité, produits structurés�
   `PRICER_TOKEN` et `DATA_REPO_TOKEN` (secrets Streamlit).
 - Page **HPFC accuracy** : l'historique s'est allongé pendant la pause, regarder les horizons D+91 et au-delà.
 
-## Exploitation
-
-### Reprise après l'échec du run quotidien
-
-1. Onglet **Actions** → run en échec → lire l'étape fautive (tableau des étapes dans la
-   [notice](docs/NOTICE.md#2-le-run-quotidien-github-actions)). Les étapes €STR, options et précision sont
-   rattrapées d'elles-mêmes au run suivant.
-2. Après correction (clé expirée, API en panne…), relancer à la main : **Actions → workflow quotidien → Run workflow**.
-3. Si plusieurs séances manquent, les rattraper depuis un clone local avec `data/` à jour
-   (`git -C data pull --rebase`, `ENTSOE_API_KEY` exportée) :
-
-   ```bash
-   python -m hpfc.cli backfill                       # séances EEX encore disponibles et non archivées
-   python -m hpfc.cli options && python -m hpfc.cli accuracy
-   git -C data add -A && git -C data commit -m "Rattrapage HPFC" && git -C data push
-   ```
-
-   **Limite** : EEX ne garde qu'environ 45 jours de settlements. Une séance plus ancienne ne peut plus être
-   reconstruite : au-delà, le trou est définitif. Ne pas laisser un échec dépasser ce délai.
-
-### Rotation des secrets
-
-| Secret | Où | Droits | Rotation |
-|---|---|---|---|
-| `ENTSOE_API_KEY` | GitHub : Settings → Secrets and variables → Actions | clé de l'API ENTSO-E | générer une nouvelle clé sur la plateforme ENTSO-E, remplacer le secret, relancer le workflow |
-| `DATA_REPO_TOKEN` (workflow) | GitHub : Settings → Secrets and variables → Actions | *fine-grained*, **Contents : Read and write** sur `menckley/power-hpfc-data` | créer un nouveau jeton (GitHub → Settings → Developer settings), remplacer le secret, révoquer l'ancien |
-| `DATA_REPO_TOKEN` (app) | Streamlit Cloud : Settings → Secrets | *fine-grained*, **Contents : Read** sur `menckley/power-hpfc-data` | idem ; secret distinct de celui du workflow, à remplacer séparément |
-| `PRICER_TOKEN` | Streamlit Cloud : Settings → Secrets | *fine-grained*, **Contents : Read and write** sur `menckley/pricer` | idem |
-
-Un jeton *fine-grained* expire à la date choisie à sa création : la noter et renouveler avant. Un jeton expiré
-fait échouer l'étape 0 du workflow (récupération de `data/`) ou, côté application, le téléchargement des données.
-Ne jamais écrire un secret dans un dépôt, une issue ou un log.
-
-### Installation locale de l'application
-
-```bash
-git clone https://github.com/menckley/power-hpfc-data.git data   # nécessite un accès au dépôt privé
-pip install -e ".[app]"
-streamlit run app/streamlit_app.py
-```
-
-La page Pricer a besoin du paquet `pricer` (installé en mode éditable) ou de `PRICER_TOKEN` dans
-`.streamlit/secrets.toml` (ignoré par git). Les autres pages ne lisent que `data/`.
-
-### Contribuer
-
-Voir [CONTRIBUTING.md](CONTRIBUTING.md) (tests, ruff, CI).
-
 ## Licence
 
 Code sous licence [MIT](LICENSE). Les données de marché ne sont pas incluses (dépôt privé).
