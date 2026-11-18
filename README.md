@@ -151,6 +151,21 @@ fichier principal `app/streamlit_app.py` (dépendances : `app/requirements.txt`)
 L'application lit `data/`, téléchargé depuis le dépôt privé de données (`app/data_sync.py`) : chaque courbe
 poussée par le workflow quotidien y apparaît en moins de 5 minutes.
 
+### Dépendances verrouillées
+
+Les versions exactes sont figées dans `uv.lock` (source de vérité). `requirements-ci.txt` (CI et run quotidien)
+et `app/requirements.txt` (Streamlit Cloud) en sont dérivés ; ne pas les éditer à la main. Après un changement
+de `pyproject.toml` ou une mise à jour Dependabot :
+
+```bash
+pip install uv==0.13.9
+uv lock            # ou : uv lock --upgrade pour tout mettre à jour
+uv export --frozen --no-hashes --no-emit-project --extra dev --extra app -o requirements-ci.txt
+uv export --frozen --no-hashes --no-emit-project --extra app -o app/requirements.txt
+```
+
+La CI vérifie que ces fichiers sont synchronisés et lance `pip-audit`.
+
 | Page | Contenu |
 |---|---|
 | **Pricer** (accueil) | Pricing d'un deal avec le paquet du dépôt `pricer` (téléchargé avec le secret `PRICER_TOKEN`, rechargé moins de 5 minutes après un push qui modifie `src/` ou `config/` de `pricer`) ; archivage automatique dans le journal de `pricer` |
