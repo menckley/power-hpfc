@@ -22,6 +22,8 @@ import streamlit as st
 DATA_REPO = "menckley/power-hpfc-data"
 DATA_REF = "main"
 MARKER = ".source_commit"                 # commit du dépôt de données extrait dans data/
+MAX_ARCHIVE_BYTES = 1 << 30               # plafond de l'archive téléchargée (1 Gio) : protège le disque
+DISK_MARGIN = 3                           # espace libre exigé = DISK_MARGIN × taille de l'archive (extraction)
 _LOCK = threading.Lock()
 
 
@@ -37,8 +39,12 @@ def _token() -> str | None:
 
 
 def _gh(path: str, accept: str, timeout: int = 60, stream: bool = False) -> requests.Response:
+    headers = {"Accept": accept}
+    token = _token()
+    if token:                             # pas d'en-tête Authorization sans jeton
+        headers["Authorization"] = f"Bearer {token}"
     r = requests.get(f"https://api.github.com/repos/{DATA_REPO}{path}", timeout=timeout, stream=stream,
-                     headers={"Authorization": f"Bearer {_token()}", "Accept": accept})
+                     headers=headers)
     if r.status_code != 200:
         raise RuntimeError(f"accès au dépôt de données {DATA_REPO} refusé par GitHub (HTTP {r.status_code}) : "
                            "vérifier le secret DATA_REPO_TOKEN (Contents en lecture sur ce dépôt)")
@@ -58,8 +64,20 @@ def _download(sha: str, data: Path) -> None:
         archive = Path(tmp) / "data.tar.gz"
         with _gh(f"/tarball/{sha}", "application/vnd.github+json", timeout=300, stream=True) as r, \
                 open(archive, "wb") as f:
+            declared = r.headers.get("Content-Length")
+            if declared and declared.isdigit() and int(declared) > MAX_ARCHIVE_BYTES:
+                raise RuntimeError(f"archive du dépôt de données trop volumineuse ({int(declared)} octets > "
+                                   f"{MAX_ARCHIVE_BYTES})")
+            size = 0
             for chunk in r.iter_content(chunk_size=1 << 20):
+                size += len(chunk)
+                if size > MAX_ARCHIVE_BYTES:
+                    raise RuntimeError(f"archive du dépôt de données trop volumineuse (> {MAX_ARCHIVE_BYTES} octets)")
                 f.write(chunk)
+        free = shutil.disk_usage(parent).free
+        if free < DISK_MARGIN * size:
+            raise RuntimeError(f"espace disque insuffisant pour extraire l'archive ({free} octets libres, "
+                               f"{DISK_MARGIN * size} requis)")
         with tarfile.open(archive, mode="r:gz") as tar:
             members = [m for m in tar.getmembers() if m.isfile() or m.isdir()]     # ni liens ni fichiers spéciaux
             tar.extractall(tmp, members=members, filter="data")
