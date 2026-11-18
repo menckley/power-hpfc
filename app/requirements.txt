@@ -86,7 +86,7 @@ pyarrow==26.0.1
     #   streamlit
 pydeck==0.9.3
     # via streamlit
-python-dateutil==4.0.0
+python-dateutil==2.9.0.post0
     # via
     #   holidays
     #   pandas
