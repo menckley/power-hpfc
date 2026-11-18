@@ -4,7 +4,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
-  - package-ecosystem: pip
+  - package-ecosystem: uv   # rafraîchit uv.lock ; régénérer ensuite requirements-ci.txt et app/requirements.txt (cf. README)
     directory: /
     schedule:
       interval: weekly
