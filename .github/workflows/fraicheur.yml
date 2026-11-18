@@ -1,0 +1,31 @@
+name: Fraîcheur de l'archive
+
+on:
+  schedule:
+    - cron: "30 11 * * *"       # chaque jour à 11:30 UTC, bien après la collecte quotidienne
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fraicheur:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Vérifier que le dernier commit de power-hpfc-data a moins de 36 h
+        env:
+          GH_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
+        run: |
+          date_commit=$(gh api "repos/menckley/power-hpfc-data/commits?per_page=1" --jq '.[0].commit.committer.date')
+          if [ -z "$date_commit" ]; then
+            echo "::error::Dernier commit de power-hpfc-data introuvable"
+            exit 1
+          fi
+          age_h=$(( ( $(date -u +%s) - $(date -u -d "$date_commit" +%s) ) / 3600 ))
+          echo "Dernier commit : $date_commit (il y a ${age_h} h)"
+          if [ "$age_h" -ge 36 ]; then
+            echo "::error::Archive périmée : dernier commit il y a ${age_h} h (seuil 36 h). L'API EEX ne garde que ~45 jours."
+            exit 1
+          fi

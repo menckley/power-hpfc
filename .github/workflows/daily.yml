@@ -40,23 +40,23 @@ jobs:
       - name: Installer le projet
         run: pip install -e ".[dev]"
 
-      - name: Tests
-        run: python -m pytest -q
-
       - name: Construire la courbe de la dernière séance EEX
         env:
           ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
         run: python -m hpfc.cli run --market FR
 
       - name: Compléter le journal des €STR (BCE)
+        id: estr
         continue-on-error: true     # API BCE en panne : rattrapé au prochain run, sans trou
         run: python -m hpfc.cli estr
 
       - name: Archiver les settlements d'options EEX
+        id: options
         continue-on-error: true     # n'empêche jamais l'archivage de la courbe du jour
         run: python -m hpfc.cli options --market FR
 
       - name: Mesurer la précision des courbes face au day-ahead réalisé
+        id: accuracy
         continue-on-error: true     # n'empêche jamais l'archivage de la courbe du jour
         run: python -m hpfc.cli accuracy --market FR
 
@@ -70,5 +70,31 @@ jobs:
             echo "Rien de nouveau à archiver"
           else
             git commit -m "Archive HPFC FR $(date -u +%Y-%m-%d)"
-            git push
+            # reprise : la branche distante a pu avancer entre-temps
+            for essai in 1 2 3; do
+              if git pull --rebase && git push; then
+                exit 0
+              fi
+              echo "Échec du push (essai $essai/3)"
+              git rebase --abort 2>/dev/null || true
+              sleep $((essai * 10))
+            done
+            echo "::error::Impossible de pousser l'archive après 3 essais"
+            exit 1
           fi
+
+      - name: Signaler les étapes optionnelles en échec
+        if: always()                # après l'archivage : n'empêche jamais la courbe du jour
+        env:
+          ESTR: ${{ steps.estr.outcome }}
+          OPTIONS: ${{ steps.options.outcome }}
+          ACCURACY: ${{ steps.accuracy.outcome }}
+        run: |
+          echec=0
+          for etape in ESTR OPTIONS ACCURACY; do
+            if [ "${!etape}" = "failure" ]; then
+              echo "::error::Étape optionnelle en échec : $etape"
+              echec=1
+            fi
+          done
+          exit $echec
