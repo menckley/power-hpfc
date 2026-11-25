@@ -47,10 +47,12 @@ def month_chunks(start: date, end: date) -> list[tuple[date, date]]:
 
 
 def fetch_day_ahead(client, area: str, start: date, end: date, tz: str,
-                    mtu_switch: date = MTU_15MIN_START) -> pd.Series:
+                    mtu_switch: date = MTU_15MIN_START, allow_gaps: bool = False) -> pd.Series:
     """Prix day-ahead des jours locaux [start, end], au pas natif du marché, contrôlés.
 
     Le bloc ne doit pas chevaucher le changement de pas de marché.
+    Avec `allow_gaps`, les pas manquants sont tolérés (l'appelant doit les compléter puis
+    contrôler la grille entière) ; doublons, pas en trop et NaN restent refusés.
     """
     if start > end:
         raise ValueError(f"période vide : {start} -> {end}")
@@ -74,7 +76,10 @@ def fetch_day_ahead(client, area: str, start: date, end: date, tz: str,
     s = raw.tz_convert("UTC")
     s = s[(s.index >= t0) & (s.index < t1)].astype(float).rename("price")
     s.index.name = "utc"
-    check_grid(s, expected_grid(start, end, tz, freq), label)
+    expected = expected_grid(start, end, tz, freq)
+    if allow_gaps:
+        expected = expected[expected.isin(s.index)]
+    check_grid(s, expected, label)
     return s
 
 
@@ -94,11 +99,12 @@ def load_day_ahead(client, area: str, start: date, end: date, tz: str,
     paths = [(partition_dir(root, "entsoe/day_ahead", market=market, month=f"{s0:%Y-%m}")
               / "day_ahead.parquet") if root is not None else None for s0, _ in months]
 
-    parts, need = {}, []
+    parts, need, archived = {}, [], {}
     for i, (s0, e0) in enumerate(months):
         expected = expected_grid(s0, e0, tz, native_freq(s0, mtu_switch))
         if paths[i] is not None and paths[i].exists():
             cached = read_parquet(paths[i])["price"]
+            archived[i] = cached
             sub = cached[(cached.index >= expected[0]) & (cached.index <= expected[-1])]
             try:
                 check_grid(sub, expected, f"ENTSO-E day-ahead {area} {s0} -> {e0}")
@@ -117,7 +123,22 @@ def load_day_ahead(client, area: str, start: date, end: date, tz: str,
         fetch_start = date(first.year, first.month, 1) if root is not None else first
         fetch_end = months[g[-1]][1]
         log.info("ENTSO-E : téléchargement %s -> %s", fetch_start, fetch_end)
-        fetched = fetch_day_ahead(client, area, fetch_start, fetch_end, tz, mtu_switch)
+        fetched = fetch_day_ahead(client, area, fetch_start, fetch_end, tz, mtu_switch,
+                                  allow_gaps=True)
+        # Pas absents du téléchargement : repris de l'archive du mois (jamais d'interpolation).
+        old = archived.get(g[0])
+        if old is not None:
+            lo_f = pd.Timestamp(fetch_start, tz=tz)
+            hi_f = pd.Timestamp(fetch_end + timedelta(days=1), tz=tz)
+            gap = old.index.difference(fetched.index)
+            gap = gap[(gap >= lo_f) & (gap < hi_f)]
+            if len(gap):
+                log.warning("ENTSO-E : %d pas absents du téléchargement repris de l'archive "
+                            "(1er : %s)", len(gap), gap[0])
+                fetched = pd.concat([fetched, old.loc[gap].astype(float)]).sort_index().rename("price")
+                fetched.index.name = "utc"
+        check_grid(fetched, expected_grid(fetch_start, fetch_end, tz, native_freq(fetch_start, mtu_switch)),
+                   f"ENTSO-E day-ahead {area} {fetch_start} -> {fetch_end}")
         for i in g:
             s0, e0 = months[i]
             m0 = date(s0.year, s0.month, 1) if root is not None else s0
