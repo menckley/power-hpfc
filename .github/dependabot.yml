@@ -8,3 +8,14 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Une seule PR par semaine pour les mises à jour mineures et correctives : des PR séparées
+    # qui modifient toutes uv.lock et les requirements se marchent dessus une fois mergées.
+    groups:
+      dependances-python:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # holidays 0.109 exige python-dateutil < 3 : la 4.0 rend l'installation impossible
+      # (pannes du 18/11 et du 25/11). À lever quand holidays l'acceptera.
+      - dependency-name: "python-dateutil"
+        versions: [">=3"]
