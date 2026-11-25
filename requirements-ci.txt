@@ -97,7 +97,7 @@ pygments==2.21.0
     # via pytest
 pytest==9.2.0
     # via power-hpfc
-python-dateutil==2.9.0.post0
+python-dateutil==4.0.0
     # via
     #   holidays
     #   pandas
