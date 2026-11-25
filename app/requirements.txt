@@ -94,7 +94,7 @@ python-multipart==0.0.34
     # via streamlit
 pytz==2026.6
     # via entsoe-py
-pyyaml==6.0.4
+pyyaml==6.0.3
     # via power-hpfc
 referencing==0.37.0
     # via
