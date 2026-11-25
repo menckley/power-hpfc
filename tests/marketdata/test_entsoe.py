@@ -83,3 +83,31 @@ def test_une_requete_par_mois_manquant(tmp_path):
     client2 = FakeClient()
     load_day_ahead(client2, "FR", date(2023, 12, 1), date(2024, 2, 29), TZ, root=tmp_path, market="FR")
     assert client2.calls == 1          # seul décembre 2023 manquait
+
+
+def test_pas_manquants_completes_par_l_archive(tmp_path):
+    pytest.importorskip("pyarrow")
+    # Archive du mois complète, puis ENTSO-E « perd » la journée du 3 (96 pas) au téléchargement.
+    first = load_day_ahead(FakeClient(), "FR", date(2026, 10, 1), date(2026, 10, 5), TZ,
+                           root=tmp_path, market="FR")
+    client = FakeClient(drop=slice(2 * 96, 3 * 96))
+    s = load_day_ahead(client, "FR", date(2026, 10, 1), date(2026, 10, 6), TZ,
+                       root=tmp_path, market="FR")
+    assert client.calls == 1 and len(s) == 6 * 96
+    day3 = s[(s.index >= pd.Timestamp("2026-10-03", tz=TZ)) & (s.index < pd.Timestamp("2026-10-04", tz=TZ))]
+    assert (day3.values == first.loc[day3.index].values).all()   # valeurs archivées, rien d'inventé
+
+
+def test_pas_manquants_sans_archive_refuses(tmp_path):
+    pytest.importorskip("pyarrow")
+    with pytest.raises(DataNotFoundError):
+        load_day_ahead(FakeClient(drop=slice(10, 20)), "FR", date(2026, 10, 1), date(2026, 10, 5), TZ,
+                       root=tmp_path, market="FR")
+
+
+def test_pas_manquants_absents_aussi_de_l_archive_refuses(tmp_path):
+    pytest.importorskip("pyarrow")
+    load_day_ahead(FakeClient(), "FR", date(2026, 10, 1), date(2026, 10, 3), TZ, root=tmp_path, market="FR")
+    with pytest.raises(DataNotFoundError):
+        load_day_ahead(FakeClient(drop=slice(4 * 96, 5 * 96)), "FR", date(2026, 10, 1), date(2026, 10, 6),
+                       TZ, root=tmp_path, market="FR")
