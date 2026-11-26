@@ -111,3 +111,24 @@ def test_pas_manquants_absents_aussi_de_l_archive_refuses(tmp_path):
     with pytest.raises(DataNotFoundError):
         load_day_ahead(FakeClient(drop=slice(4 * 96, 5 * 96)), "FR", date(2026, 10, 1), date(2026, 10, 6),
                        TZ, root=tmp_path, market="FR")
+
+
+def test_jour_non_publie_tolere_dans_le_dernier_mois_seulement(tmp_path):
+    pytest.importorskip("pyarrow")
+    client = FakeClient(drop=slice(2 * 96, 3 * 96))
+    s = load_day_ahead(client, "FR", date(2026, 10, 1), date(2026, 10, 6), TZ,
+                       root=tmp_path, market="FR", tolerate_last_month_gaps=True)
+    assert len(s) == 5 * 96                       # rien d'inventé
+    with pytest.raises(DataNotFoundError):        # mois antérieur : toujours strict
+        load_day_ahead(FakeClient(drop=slice(2 * 96, 3 * 96)), "FR", date(2026, 9, 1),
+                       date(2026, 10, 6), TZ, root=tmp_path / "b", market="FR",
+                       tolerate_last_month_gaps=True)
+
+
+def test_horaire_ecarte_les_heures_incompletes_du_dernier_mois():
+    h = load_day_ahead_hourly(FakeClient(drop=slice(2 * 96, 3 * 96)), "FR", date(2026, 10, 1),
+                              date(2026, 10, 6), TZ, tolerate_last_month_gaps=True)
+    assert len(h) == 5 * 24
+    with pytest.raises(DataNotFoundError):
+        load_day_ahead_hourly(FakeClient(drop=slice(2 * 96, 3 * 96)), "FR", date(2026, 10, 1),
+                              date(2026, 10, 6), TZ)

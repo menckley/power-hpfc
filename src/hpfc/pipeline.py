@@ -104,7 +104,7 @@ def run(market: str, pricing_date: date | None = None, *, today: date | None = N
     if client is None:
         client = make_client(os.environ.get("ENTSOE_API_KEY", ""))
     spot = load_day_ahead_hourly(client, cfg.entsoe_area, cfg.history_start, session, cfg.tz,
-                                 root=root, market=cfg.market)
+                                 root=root, market=cfg.market, tolerate_last_month_gaps=True)
     hist = build_calendar(cfg, cfg.history_start, session, "h").join(spot)
     log.info("Estimation de la forme")
     model = fit_shape(hist, cfg, session)

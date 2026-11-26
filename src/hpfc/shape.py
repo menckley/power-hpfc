@@ -40,6 +40,12 @@ def calibration_months(hist: pd.DataFrame, cfg: HPFCConfig, pricing_date: date) 
     for s, e in cfg.excluded_periods:
         excluded |= (h["date"] >= s) & (h["date"] <= e)
     h = h[~excluded]
+    # Prix absents (ENTSO-E ne les publie pas encore) : tolérés dans le mois de la séance seulement ;
+    # ce mois, incomplet, est écarté de la calibration.
+    cur = pricing_date.year * 100 + pricing_date.month
+    ym_cur = h["year"] * 100 + h["month"] == cur
+    if h.loc[ym_cur, "price"].isna().any():
+        h = h[~ym_cur]
     if h["price"].isna().any():
         raise DataNotFoundError("prix manquants dans l'historique de calibration")
     h["ym"] = h["year"] * 100 + h["month"]
