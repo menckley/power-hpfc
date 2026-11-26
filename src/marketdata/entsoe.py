@@ -85,8 +85,13 @@ def fetch_day_ahead(client, area: str, start: date, end: date, tz: str,
 
 def load_day_ahead(client, area: str, start: date, end: date, tz: str,
                    root: str | None = None, market: str | None = None,
-                   mtu_switch: date = MTU_15MIN_START) -> pd.Series:
+                   mtu_switch: date = MTU_15MIN_START,
+                   tolerate_last_month_gaps: bool = False) -> pd.Series:
     """Prix day-ahead [start, end] au pas natif, avec archive mensuelle facultative.
+
+    Avec `tolerate_last_month_gaps`, les pas qu'ENTSO-E ne publie pas (et absents de l'archive)
+    sont tolérés dans le DERNIER mois demandé seulement (mois en cours, non utilisé en calibration) :
+    ils sont signalés, jamais inventés, et retentés au prochain passage. Tout autre mois reste strict.
 
     Si `root` est fourni, chaque mois est archivé dans
     root/entsoe/day_ahead/market=<market>/month=AAAA-MM/day_ahead.parquet.
@@ -137,8 +142,14 @@ def load_day_ahead(client, area: str, start: date, end: date, tz: str,
                             "(1er : %s)", len(gap), gap[0])
                 fetched = pd.concat([fetched, old.loc[gap].astype(float)]).sort_index().rename("price")
                 fetched.index.name = "utc"
-        check_grid(fetched, expected_grid(fetch_start, fetch_end, tz, native_freq(fetch_start, mtu_switch)),
-                   f"ENTSO-E day-ahead {area} {fetch_start} -> {fetch_end}")
+        expected_f = expected_grid(fetch_start, fetch_end, tz, native_freq(fetch_start, mtu_switch))
+        if tolerate_last_month_gaps and g[-1] == len(months) - 1:
+            lost = expected_f.difference(fetched.index)
+            if len(lost):
+                log.warning("ENTSO-E : %d pas non publiés dans le dernier mois, tolérés (1er : %s)",
+                            len(lost), lost[0])
+                expected_f = expected_f[expected_f.isin(fetched.index)]
+        check_grid(fetched, expected_f, f"ENTSO-E day-ahead {area} {fetch_start} -> {fetch_end}")
         for i in g:
             s0, e0 = months[i]
             m0 = date(s0.year, s0.month, 1) if root is not None else s0
@@ -154,11 +165,29 @@ def load_day_ahead(client, area: str, start: date, end: date, tz: str,
 
 def load_day_ahead_hourly(client, area: str, start: date, end: date, tz: str,
                           root: str | None = None, market: str | None = None,
-                          mtu_switch: date = MTU_15MIN_START) -> pd.Series:
-    """Comme load_day_ahead, puis agrégation horaire (moyenne des 4 quarts d'heure)."""
-    native = load_day_ahead(client, area, start, end, tz, root, market, mtu_switch)
+                          mtu_switch: date = MTU_15MIN_START,
+                          tolerate_last_month_gaps: bool = False) -> pd.Series:
+    """Comme load_day_ahead, puis agrégation horaire (moyenne des 4 quarts d'heure).
+
+    Avec `tolerate_last_month_gaps`, les heures incomplètes du dernier mois sont absentes du résultat.
+    """
+    native = load_day_ahead(client, area, start, end, tz, root, market, mtu_switch,
+                            tolerate_last_month_gaps)
     switch_utc = pd.Timestamp(mtu_switch, tz=tz).tz_convert("UTC")
     regimes = [native[native.index < switch_utc], native[native.index >= switch_utc]]
-    hourly = pd.concat([to_hourly(r) for r in regimes if len(r)]).sort_index().rename("price")
-    check_grid(hourly, expected_grid(start, end, tz, "h"), f"ENTSO-E horaire {area} {start} -> {end}")
+    expected = expected_grid(start, end, tz, "h")
+    if tolerate_last_month_gaps:
+        last_month = pd.Timestamp(date(end.year, end.month, 1), tz=tz).tz_convert("UTC")
+        parts = []
+        for r, per_hour in zip(regimes, (1, 4)):
+            if not len(r):
+                continue
+            n = r.groupby(r.index.floor("h")).transform("size")
+            keep = (n == per_hour) | (r.index < last_month)    # heures incomplètes écartées (dernier mois)
+            parts.append(r[keep].resample("h").mean().dropna())
+        hourly = pd.concat(parts).sort_index().rename("price")
+        expected = expected[(expected < last_month) | expected.isin(hourly.index)]
+    else:
+        hourly = pd.concat([to_hourly(r) for r in regimes if len(r)]).sort_index().rename("price")
+    check_grid(hourly, expected, f"ENTSO-E horaire {area} {start} -> {end}")
     return hourly
